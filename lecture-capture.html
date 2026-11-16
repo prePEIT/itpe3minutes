@@ -161,6 +161,25 @@ details.panel[open] summary::after { content: " －"; }
 .bar-status b { color: var(--ink); }
 .bar .btn { flex: none; padding: 12px 22px; font-size: 1rem; }
 
+.modes { display: flex; gap: 4px; background: var(--bg); border-radius: 10px; padding: 4px; }
+.modes button { flex: 1; font: inherit; border: 0; border-radius: 8px; padding: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+.modes button[aria-selected="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 15%, transparent); }
+.modes small { font-size: 0.72rem; color: var(--muted); font-weight: 500; }
+.linkbox { display: flex; flex-direction: column; gap: 10px; }
+.linkbox textarea { font: inherit; font-family: var(--font-mono); font-size: 0.85rem; width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--surface); color: var(--ink); resize: vertical; }
+.linkrow { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; }
+
+/* capture stage: a deliberately dark, single-look screen while a YouTube video plays */
+.stage { position: fixed; inset: 0; z-index: 30; background: #000; color: #E6EAF1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; }
+.stage-video { position: relative; width: min(100vw, calc((100vh - 64px) * 16 / 9)); aspect-ratio: 16 / 9; max-width: 100%; background: #000; }
+#ytHost, .stage-video iframe, .stage-video video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.stage-cover { position: absolute; inset: 0; }
+.stage-bar { width: 100%; height: 64px; display: flex; align-items: center; gap: 12px; background: #11161E; border-top: 1px solid #2B3443;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.stage-info { flex: 1; min-width: 0; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #C9D1DC; }
+.stage-info b { color: #FFFFFF; }
+
 @media (prefers-reduced-motion: no-preference) {
   .track .fill { transition: width 0.3s ease; }
 }
@@ -169,12 +188,40 @@ details.panel[open] summary::after { content: " －"; }
 <div class="wrap">
   <header>
     <h1>강의 화면 캡처</h1>
-    <p>폰에 있는 강의 영상을 일정 간격으로 훑어서, 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상은 폰 밖으로 나가지 않아요.</p>
+    <p>강의 영상을 훑어서, 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상은 이 기기 밖으로 나가지 않아요.</p>
   </header>
 
   <section class="panel" aria-labelledby="h-pick">
     <h2 id="h-pick">1. 영상 고르기</h2>
-    <label class="pick" for="file">
+    <div class="modes" id="modes" role="tablist" aria-label="가져올 방법" hidden>
+      <button type="button" role="tab" id="modeFile" aria-selected="true">영상 파일</button>
+      <button type="button" role="tab" id="modeLink" aria-selected="false">유튜브 링크 <small>PC</small></button>
+    </div>
+    <div class="linkbox" id="linkBox" hidden>
+      <label for="links" class="lbl">유튜브 링크 (한 줄에 하나씩, 여러 개 가능)</label>
+      <textarea id="links" rows="4" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/..." spellcheck="false"></textarea>
+      <div class="linkrow">
+        <button type="button" class="btn ghost" id="addLinks">목록에 추가</button>
+      </div>
+      <div class="row">
+        <label for="ytMode">확인 방식</label>
+        <select id="ytMode">
+          <option value="jump" selected>빠르게: 건너뛰며 확인 (추천)</option>
+          <option value="play">꼼꼼하게: 처음부터 끝까지 재생하며 확인</option>
+        </select>
+        <p class="hint" id="ytModeHint"></p>
+      </div>
+      <label for="speed" class="inline" id="speedRow">재생 속도
+        <select id="speed">
+          <option value="1">1배속 (가장 꼼꼼)</option>
+          <option value="1.5">1.5배속</option>
+          <option value="2" selected>2배속</option>
+        </select>
+      </label>
+      <p class="msg err" id="linkMsg" hidden></p>
+      <p class="hint">영상 파일을 받지 않고, 이 페이지에서 유튜브를 띄워 바뀐 화면만 찍어요. 시작하면 크롬이 화면 공유를 물어보는데, <b>'이 탭'</b>을 고르고 공유를 누르면 됩니다. 영상 하나가 끝나면 ZIP이 자동으로 저장되고 다음 링크로 넘어가요.</p>
+    </div>
+    <label class="pick" for="file" id="filePick">
       <svg class="film" viewBox="0 0 46 34" aria-hidden="true">
         <rect x="1" y="1" width="44" height="32" rx="4" fill="none" stroke="currentColor" stroke-width="2"/>
         <rect x="9" y="7" width="28" height="20" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
@@ -184,31 +231,50 @@ details.panel[open] summary::after { content: " －"; }
       <span>여러 개를 한 번에 골라도 됩니다 · mp4 권장</span>
       <input id="file" type="file" accept="video/*,.mp4,.m4v,.mov,.webm,.mkv" multiple>
     </label>
+    <div class="notice" id="resumeNote" hidden>
+      <b>지난번에 끝내지 못한 영상이 있어요</b>
+      <span id="resumeList"></span><br>같은 파일을 다시 고르면 하던 곳부터 이어서 해요. (3일 동안 보관)
+      <div><button type="button" class="btn ghost" id="resumeClear">보관한 기록 지우기</button></div>
+    </div>
+    <p class="hint" id="ytPanelHint" hidden>유튜브 링크는 이 페이지에 함께 떠 있는 <b>'강의 화면 캡처 (유튜브)'</b> 패널에 넣으세요.</p>
   </section>
 
   <section class="panel" aria-labelledby="h-set">
     <h2 id="h-set">2. 설정</h2>
-    <div class="row">
+    <div class="row" id="intervalRow">
       <span class="lbl" id="lbl-int">몇 초마다 확인할까요?</span>
       <div class="chips" id="intervals" role="group" aria-labelledby="lbl-int">
+        <button type="button" class="chip" data-v="1">1초</button>
         <button type="button" class="chip" data-v="2">2초</button>
         <button type="button" class="chip" data-v="3">3초</button>
+        <button type="button" class="chip" data-v="4">4초</button>
         <button type="button" class="chip" data-v="5" aria-pressed="true">5초</button>
+        <button type="button" class="chip" data-v="6">6초</button>
+        <button type="button" class="chip" data-v="7">7초</button>
+        <button type="button" class="chip" data-v="8">8초</button>
+        <button type="button" class="chip" data-v="9">9초</button>
         <button type="button" class="chip" data-v="10">10초</button>
-        <button type="button" class="chip" data-v="25">25초</button>
       </div>
-      <p class="hint">간격이 짧을수록 짧게 지나간 화면도 잡지만 시간이 더 걸립니다. 사진 수는 거의 늘지 않아요.</p>
+      <p class="hint">간격이 짧을수록 잠깐 지나간 화면까지 잡지만 시간이 오래 걸려요. 사진 수는 간격과 거의 상관없어요. 1~2초는 3시간 반 영상 기준 폰에서 1시간 가까이 걸릴 수 있어요.<span id="intHintLink" hidden> 유튜브 링크의 '빠르게'는 화면이 바뀐 구간을 이 간격까지 좁혀 들여다보고, '꼼꼼하게'는 간격과 상관없이 계속 지켜봐요.</span></p>
     </div>
     <label class="switch" for="dup">
       <input type="checkbox" id="dup" checked>
-      <div><b>같은 화면은 건너뛰기</b><span class="hint">직전에 저장한 화면과 똑같으면 저장하지 않습니다. 끄면 간격마다 전부 저장해요.</span></div>
+      <div><b>같은 화면은 건너뛰기</b><span class="hint">직전 사진은 물론, 앞에서 이미 찍은 화면으로 되돌아와도 다시 저장하지 않아요. 끄면 간격마다 전부 저장해요.</span></div>
+    </label>
+    <label class="switch" for="moving">
+      <input type="checkbox" id="moving" checked>
+      <div><b>계속 움직이는 부분은 무시</b><span class="hint">발표자 얼굴 화면, 자막, 시계처럼 계속 바뀌는 부분과 마우스 커서 이동은 '새 화면'으로 치지 않아요. 같은 슬라이드가 반복 저장되는 가장 흔한 원인입니다.</span></div>
+    </label>
+    <label class="switch" for="merge">
+      <input type="checkbox" id="merge" checked>
+      <div><b>내용이 덧붙기만 하면 한 장으로</b><span class="hint">판서가 이어지거나 글이 한 줄씩 나타나면, 완성된 마지막 화면 한 장만 남겨요. 지워지거나 다른 글로 바뀐 내용이 있으면 따로 저장하니 정보는 빠지지 않아요.</span></div>
     </label>
     <div class="row">
       <label for="sens">변화 감지 민감도</label>
       <select id="sens">
-        <option value="0.002" selected>보통: 글자 한 줄이 추가돼도 새 화면으로 봄</option>
-        <option value="0.001">높게: 글자 몇 개만 바뀌어도 새 화면으로 봄</option>
-        <option value="0.01">낮게: 화면이 꽤 바뀌어야 새 화면으로 봄</option>
+        <option value="30">높게: 단어 하나만 바뀌어도 새 화면 (추천)</option>
+        <option value="80">보통: 글자 몇 줄이 바뀌면 새 화면</option>
+        <option value="300">낮게: 화면이 꽤 바뀌어야 새 화면</option>
       </select>
     </div>
     <div class="row">
@@ -233,7 +299,7 @@ details.panel[open] summary::after { content: " －"; }
     </div>
     <div class="notice" id="keepOn" hidden>
       <b>처리하는 동안 이 화면을 켜 두세요</b>
-      다른 앱으로 넘어가거나 화면이 꺼지면 멈춥니다. 다시 돌아오면 이어서 진행해요.
+다른 앱으로 넘어가거나 화면이 꺼지면 잠시 멈추고, 돌아오면 이어서 진행해요. 탭이 닫혔더라도 같은 파일을 다시 고르면 하던 곳부터 이어서 해요.
     </div>
   </section>
 
@@ -241,13 +307,24 @@ details.panel[open] summary::after { content: " －"; }
     <summary>사용 팁</summary>
     <ul class="tips">
       <li><b>아이폰:</b> 영상을 고를 때 <b>'파일 선택'</b>(파일 앱)에서 고르세요. '사진 보관함'에서 고르면 영상이 압축돼 화질이 떨어질 수 있어요.</li>
-      <li><b>시간:</b> 3시간 반 영상, 5초 간격 기준 폰에서 보통 10~25분 걸립니다. 충전기를 꽂아 두는 게 좋아요.</li>
-      <li><b>저장:</b> 영상 하나가 끝나면 'ZIP 만들기' → 'ZIP 받기'를 누르세요. 다음 영상은 그동안 계속 처리됩니다.</li>
+      <li><b>시간:</b> 3시간 반 영상, 5초 간격 기준 폰에서 보통 10~25분 걸립니다. 1초 간격은 그 3~5배까지 걸릴 수 있어요. 충전기를 꽂아 두는 게 좋아요.</li>
+      <li><b>중간에 끊겼을 때:</b> 탭이 닫히거나 새로고침돼도 한 부분은 이 기기에 3일 동안 보관돼요. 같은 파일을 다시 고르고 설정을 그대로 둔 채 시작하면 하던 곳부터 이어서 합니다.</li>
+      <li><b>유튜브 강의:</b> PC는 크롬 확장 프로그램, 안드로이드 폰은 Edge 앱의 Tampermonkey에 '강의 화면 캡처 (유튜브)'를 설치하면 이 페이지에 유튜브 링크를 넣는 패널이 따로 생겨요.</li>
+      <li><b>그래도 같은 장면이 여러 장이면:</b> 민감도를 '보통'으로 낮춰 보세요. 반대로 빠진 장면이 있으면 간격을 줄이세요.</li>
+      <li><b>저장:</b> 영상 하나가 끝나면 'ZIP 만들기' → 'ZIP 받기'를 누르세요. 다음 영상은 그동안 계속 처리됩니다. ZIP을 받으면 이 기기에 보관해 둔 기록은 지워져요.</li>
       <li><b>ZIP 풀기:</b> 아이폰은 파일 앱에서 ZIP을 한 번 탭하면 같은 이름의 폴더가 생깁니다. 안드로이드는 'Files by Google' 등 파일 앱에서 ZIP을 열고 '압축 풀기'를 누르세요.</li>
       <li><b>영상이 많을 때:</b> ZIP을 받은 영상은 카드 오른쪽 위 ✕로 지워 주세요. 폰 메모리를 비워서 다음 영상이 안정적으로 처리됩니다.</li>
       <li><b>'열 수 없는 형식'이 뜰 때:</b> 그 폰에서 재생이 안 되는 영상이에요. 컴퓨터용 PyCharm 스크립트로 처리하세요.</li>
     </ul>
   </details>
+</div>
+
+<div class="stage" id="stage" hidden>
+  <div class="stage-video" id="stageVideo"><div id="ytHost"></div><div class="stage-cover"></div></div>
+  <div class="stage-bar">
+    <div class="stage-info" id="stageInfo">준비 중…</div>
+    <button type="button" class="btn stop" id="stageStop">멈추기</button>
+  </div>
 </div>
 
 <div class="bar">
@@ -262,7 +339,7 @@ details.panel[open] summary::after { content: " －"; }
   "use strict";
   var $ = function (s) { return document.querySelector(s); };
   var jobsEl = $("#jobs"), goBtn = $("#go"), barStatus = $("#barStatus");
-  var state = { jobs: [], running: false, stopReq: false, interval: 5, skipDup: true, ratio: 0.002, maxW: 0, quality: 0.9 };
+  var state = { jobs: [], running: false, stopReq: false, interval: 5, skipDup: true, ignoreMoving: true, merge: true, minPx: 30, maxW: 0, quality: 0.9, mode: "file", speed: 2, ytMode: "jump" };
   var seq = 0, wakeLock = null;
 
   // ---------- helpers ----------
@@ -319,28 +396,56 @@ details.panel[open] summary::after { content: " －"; }
   function releaseWake() { try { if (wakeLock) wakeLock.release(); } catch (e) {} wakeLock = null; }
   document.addEventListener("visibilitychange", function () { if (state.running && !document.hidden) lockWake(); });
 
-  // ---------- settings ----------
+  // ---------- settings (remembered on this phone) ----------
+  var PREF_KEY = "lecture-capture-settings-v2";
+  function savePrefs() {
+    try { localStorage.setItem(PREF_KEY, JSON.stringify({ interval: state.interval, skipDup: state.skipDup, ignoreMoving: state.ignoreMoving, merge: state.merge, minPx: state.minPx, maxW: state.maxW, mode: state.mode, speed: state.speed, ytMode: state.ytMode })); } catch (e) {}
+  }
+  function applyPrefsToUI() {
+    document.querySelectorAll("#intervals .chip").forEach(function (c) { c.setAttribute("aria-pressed", Number(c.dataset.v) === state.interval ? "true" : "false"); });
+    $("#dup").checked = state.skipDup; $("#moving").checked = state.ignoreMoving; $("#merge").checked = state.merge;
+    $("#sens").value = String(state.minPx); $("#size").value = String(state.maxW);
+    lockSettings(false);
+  }
+  try {
+    var saved = JSON.parse(localStorage.getItem(PREF_KEY) || "null");
+    if (saved) {
+      if (saved.interval >= 1 && saved.interval <= 10) state.interval = saved.interval;
+      ["skipDup", "ignoreMoving", "merge"].forEach(function (k) { if (typeof saved[k] === "boolean") state[k] = saved[k]; });
+      if ([30, 80, 300].indexOf(saved.minPx) >= 0) state.minPx = saved.minPx;
+      if ([0, 1280].indexOf(saved.maxW) >= 0) state.maxW = saved.maxW;
+      if (saved.mode === "link" || saved.mode === "file") state.mode = saved.mode;
+      if ([1, 1.5, 2].indexOf(saved.speed) >= 0) state.speed = saved.speed;
+      if (saved.ytMode === "jump" || saved.ytMode === "play") state.ytMode = saved.ytMode;
+    }
+  } catch (e) {}
   $("#intervals").addEventListener("click", function (e) {
     var b = e.target.closest(".chip"); if (!b || state.running) return;
     state.interval = Number(b.dataset.v);
     document.querySelectorAll("#intervals .chip").forEach(function (c) { c.setAttribute("aria-pressed", c === b ? "true" : "false"); });
+    savePrefs(); refreshBar();
   });
-  $("#dup").addEventListener("change", function (e) { state.skipDup = e.target.checked; $("#sens").disabled = !state.skipDup || state.running; });
-  $("#sens").addEventListener("change", function (e) { state.ratio = Number(e.target.value); });
-  $("#size").addEventListener("change", function (e) { state.maxW = Number(e.target.value); });
+  $("#dup").addEventListener("change", function (e) { state.skipDup = e.target.checked; lockSettings(state.running); savePrefs(); });
+  $("#moving").addEventListener("change", function (e) { state.ignoreMoving = e.target.checked; savePrefs(); });
+  $("#merge").addEventListener("change", function (e) { state.merge = e.target.checked; savePrefs(); });
+  $("#sens").addEventListener("change", function (e) { state.minPx = Number(e.target.value); savePrefs(); });
+  $("#size").addEventListener("change", function (e) { state.maxW = Number(e.target.value); savePrefs(); });
   function lockSettings(on) {
     document.querySelectorAll("#intervals .chip").forEach(function (c) { c.disabled = on; });
-    $("#dup").disabled = on; $("#sens").disabled = on || !state.skipDup; $("#size").disabled = on;
+    var off = on || !state.skipDup;
+    $("#dup").disabled = on; $("#moving").disabled = off; $("#merge").disabled = off; $("#sens").disabled = off; $("#size").disabled = on;
   }
+  applyPrefsToUI();
 
   // ---------- jobs ----------
   $("#file").addEventListener("change", function (e) {
     var files = Array.prototype.slice.call(e.target.files || []);
     files.sort(function (a, b) { return a.name.localeCompare(b.name, "ko", { numeric: true }); });
     files.forEach(function (f) {
-      var job = { id: ++seq, file: f, name: baseName(f.name), status: "waiting", images: [], skipped: 0, missed: 0,
-        duration: 0, pos: 0, started: 0, finished: 0, msg: "", err: false, saving: false, saved: false, ui: null, thumbs: [] };
-      state.jobs.push(job); buildCard(job); renderJob(job);
+      var job = { id: ++seq, kind: "file", file: f, key: fileKey(f), label: f.name, name: baseName(f.name), status: "waiting", images: [], skipped: 0, missed: 0, merged: 0,
+        maskPct: 0, maskOff: false, phase: "", duration: 0, pos: 0, pos0: 0, count: 0, started: 0, finished: 0, msg: "", err: false, saving: false, saved: false, ui: null, thumbs: [],
+        recs: null, recsKey: "", hasSaved: false };
+      state.jobs.push(job); buildCard(job); renderJob(job); noteSaved(job);
     });
     e.target.value = "";
     refreshBar();
@@ -350,11 +455,11 @@ details.panel[open] summary::after { content: " －"; }
     var card = el("article", "job");
     var head = el("div", "job-head");
     var nameBox = el("div"); nameBox.style.flex = "1"; nameBox.style.minWidth = "0";
-    var name = el("div", "job-name", job.file.name);
-    var meta = el("div", "job-meta", (job.file.size / 1048576).toFixed(0) + " MB");
+    var name = el("div", "job-name", job.label);
+    var meta = el("div", "job-meta", "");
     nameBox.append(name, meta);
     var pill = el("span", "pill", "대기");
-    var x = el("button", "x", "✕"); x.type = "button"; x.setAttribute("aria-label", job.file.name + " 목록에서 지우기");
+    var x = el("button", "x", "✕"); x.type = "button"; x.setAttribute("aria-label", job.label + " 목록에서 지우기");
     x.addEventListener("click", function () { removeJob(job); });
     head.append(nameBox, pill, x);
     var track = el("div", "track"); var fill = el("div", "fill"); track.append(fill);
@@ -365,20 +470,33 @@ details.panel[open] summary::after { content: " －"; }
     var save = el("button", "btn", "ZIP 저장"); save.type = "button";
     save.addEventListener("click", function () { saveJob(job); });
     var get = el("a", "btn"); get.hidden = true;
-    get.addEventListener("click", function () { job.saved = true; job.msg = "받기를 눌렀어요. 아이폰은 '파일' 앱의 다운로드 폴더, 안드로이드는 '다운로드' 폴더에 저장돼요."; setTimeout(function () { renderJob(job); }, 0); });
+    get.addEventListener("click", function () {
+      job.saved = true; job.msg = "받기를 눌렀어요. 아이폰은 '파일' 앱의 다운로드 폴더, 안드로이드는 '다운로드' 폴더에 저장돼요.";
+      // the finished work has been handed over: what was kept on the device for "carry on later" can go
+      if (job.kind === "file" && job.status === "done") forget(job.key).then(showUnfinished);
+      setTimeout(function () { renderJob(job); }, 0);
+    });
+    var over = el("button", "btn ghost", "처음부터 다시 하기"); over.type = "button"; over.hidden = true;
+    over.addEventListener("click", function () {
+      if (job.status === "running") return;
+      job.recs = null; job.hasSaved = false; job.msg = "지난번 기록을 지웠어요. 시작하면 처음부터 해요.";
+      if (job.status === "stopped") { job.status = "waiting"; job.images = []; job.pos = 0; job.ui.track.querySelectorAll(".tick").forEach(function (t) { t.remove(); }); job.thumbs.forEach(function (th) { th.fig.remove(); URL.revokeObjectURL(th.url); }); job.thumbs = []; }
+      forget(job.key).then(showUnfinished); renderJob(job); refreshBar();
+    });
     var msg = el("p", "msg");
-    actions.append(save, get, msg);
+    actions.append(save, get, over, msg);
     card.append(head, track, stats, thumbs, actions);
     jobsEl.append(card);
-    job.ui = { card: card, meta: meta, pill: pill, x: x, fill: fill, track: track, stats: stats, thumbs: thumbs, save: save, get: get, msg: msg };
+    job.ui = { card: card, name: name, meta: meta, pill: pill, x: x, fill: fill, track: track, stats: stats, thumbs: thumbs, save: save, get: get, over: over, msg: msg };
     $("#empty").hidden = true;
   }
 
   function removeJob(job) {
     if (job.status === "running") return;
-    job.thumbs.forEach(function (u) { URL.revokeObjectURL(u); });
+    job.thumbs.forEach(function (th) { URL.revokeObjectURL(th.url); });
     if (job.zipUrl) URL.revokeObjectURL(job.zipUrl);
-    job.images = []; job.ui.card.remove();
+    if (job.kind === "file" && job.status === "done") forget(job.key).then(showUnfinished);
+    job.images = []; job.recs = null; job.ui.card.remove();
     state.jobs = state.jobs.filter(function (j) { return j !== job; });
     $("#empty").hidden = state.jobs.length > 0;
     refreshBar();
@@ -390,18 +508,24 @@ details.panel[open] summary::after { content: " －"; }
     u.pill.textContent = job.saved && job.status === "done" ? "저장함" : LABEL[job.status];
     u.pill.className = "pill" + (job.status === "running" ? " run" : job.status === "done" ? " done" : job.status === "failed" ? " bad" : "");
     u.x.disabled = job.status === "running";
-    var sizeTxt = (job.file.size / 1048576).toFixed(0) + " MB";
+    var sizeTxt = job.kind === "yt" ? "유튜브" : (job.file.size / 1048576).toFixed(0) + " MB";
     u.meta.textContent = job.duration ? sizeTxt + " · " + clock(job.duration) : sizeTxt;
+    u.name.textContent = job.label;
     u.fill.style.width = job.duration ? Math.min(100, job.pos / job.duration * 100) + "%" : "0%";
     u.track.hidden = job.status === "failed";
     u.stats.textContent = "";
     if (job.status !== "waiting" && job.status !== "failed") {
-      var s1 = el("span"); s1.append("사진 "); s1.append(el("b", null, job.images.length + "장"));
+      var live = job.kind === "file" && job.status === "running";
+      var s1 = el("span"); s1.append("사진 "); s1.append(el("b", null, (live ? "약 " + job.count : job.images.length) + "장"));
       var s2 = el("span", null, "같은 화면 건너뜀 " + job.skipped + "번");
       u.stats.append(s1, s2);
-      if (job.status === "running" && job.pos > 0) {
-        var el2 = (Date.now() - job.started) / 1000;
-        var left = el2 / job.pos * (job.duration - job.pos);
+      if (job.merged) u.stats.append(el("span", null, "덧붙은 화면 합침 " + job.merged + "번"));
+      if (job.maskPct >= 0.005) u.stats.append(el("span", null, "움직이는 부분 " + Math.round(job.maskPct * 100) + "% 무시"));
+      if (job.status === "running" && job.phase) {
+        u.stats.append(el("span", null, job.phase));
+      } else if (job.status === "running" && job.pos > 0) {
+        var el2 = (Date.now() - job.started) / 1000, gone = job.pos - (job.pos0 || 0);
+        var left = gone > 0 ? el2 / gone * (job.duration - job.pos) : NaN;
         u.stats.append(el("span", null, "남은 시간 " + mins(left)));
       } else if (job.finished) {
         u.stats.append(el("span", null, "걸린 시간 " + mins((job.finished - job.started) / 1000).replace("약 ", "")));
@@ -414,6 +538,7 @@ details.panel[open] summary::after { content: " －"; }
     u.save.textContent = job.saving ? "압축하는 중…" : job.zipUrl ? "ZIP 다시 만들기" : "ZIP 만들기";
     u.get.hidden = !job.zipUrl || job.saving;
     if (job.zipUrl) { u.get.href = job.zipUrl; u.get.download = job.name + "_캡처.zip"; u.get.textContent = "ZIP 받기 (" + job.zipMB + " MB)"; }
+    if (u.over) u.over.hidden = !(job.kind === "file" && job.hasSaved && (job.status === "waiting" || job.status === "stopped"));
     var m = job.msg;
     u.msg.textContent = m; u.msg.className = "msg" + (job.err ? " err" : "");
   }
@@ -423,100 +548,656 @@ details.panel[open] summary::after { content: " －"; }
     var tk = el("span", "tick"); tk.style.left = Math.min(100, t / job.duration * 100) + "%";
     job.ui.track.append(tk);
   }
-  function addThumb(job, blob, t) {
+  function addThumb(job, blob, t, idx) {
     var url = URL.createObjectURL(blob);
-    job.thumbs.push(url);
     var fig = el("figure"); var img = el("img"); img.src = url; img.alt = fmt(t) + " 장면"; img.loading = "lazy";
     fig.append(img, el("figcaption", null, clock(t)));
     job.ui.thumbs.append(fig);
-    while (job.ui.thumbs.children.length > 4) {
-      job.ui.thumbs.firstElementChild.remove();
-      URL.revokeObjectURL(job.thumbs.shift());
+    job.thumbs.push({ idx: idx, url: url, img: img, fig: fig });
+    while (job.thumbs.length > 4) {
+      var old = job.thumbs.shift(); old.fig.remove(); URL.revokeObjectURL(old.url);
     }
+  }
+  function replaceThumb(job, idx, blob) {
+    var th = job.thumbs.filter(function (x) { return x.idx === idx; })[0];
+    if (!th) return;
+    URL.revokeObjectURL(th.url); th.url = URL.createObjectURL(blob); th.img.src = th.url;
+  }
+
+  // ---------- comparing frames ----------
+  // Each sampled frame becomes a small blurred grayscale "signature" (480px wide, 16px blocks).
+  // Per changed pixel we ask: was the old pixel plain background (something APPEARED),
+  // is the new pixel plain background (something DISAPPEARED), or neither (it was REPLACED)?
+  var SIG_W = 480, BS = 16, TH = 30, MOVED_MAX = 160;
+  function makeGeom(vw, vh) {
+    var h = Math.max(BS, Math.round(SIG_W * vh / vw)), bx = Math.ceil(SIG_W / BS), by = Math.ceil(h / BS);
+    var blockOf = new Uint16Array(SIG_W * h);
+    for (var y = 0; y < h; y++) for (var x = 0; x < SIG_W; x++) blockOf[y * SIG_W + x] = ((y / BS) | 0) * bx + ((x / BS) | 0);
+    return { w: SIG_W, h: h, n: SIG_W * h, bx: bx, by: by, nb: bx * by, blockOf: blockOf };
+  }
+  function readSig(ctx, G, v, sr) {
+    if (sr) ctx.drawImage(v, sr[0], sr[1], sr[2], sr[3], 0, 0, G.w, G.h); else ctx.drawImage(v, 0, 0, G.w, G.h);
+    var d = ctx.getImageData(0, 0, G.w, G.h).data, n = G.n, w = G.w, h = G.h;
+    var g = new Uint8Array(n), tmp = new Uint16Array(n), out = new Uint8Array(n), i, p, x, y, r;
+    for (i = 0, p = 0; i < n; i++, p += 4) g[i] = (d[p] * 77 + d[p + 1] * 150 + d[p + 2] * 29) >> 8;
+    for (y = 0; y < h; y++) {
+      r = y * w;
+      for (x = 0; x < w; x++) tmp[r + x] = (x > 0 ? g[r + x - 1] : g[r + x]) + g[r + x] + (x < w - 1 ? g[r + x + 1] : g[r + x]);
+    }
+    var sum = 0, sq = 0;
+    for (y = 0; y < h; y++) {
+      r = y * w; var up = y > 0 ? r - w : r, dn = y < h - 1 ? r + w : r;
+      for (x = 0; x < w; x++) { var val = ((tmp[up + x] + tmp[r + x] + tmp[dn + x]) / 9) | 0; out[r + x] = val; sum += val; sq += val * val; }
+    }
+    var mean = sum / n;
+    return { g: out, modes: new Int16Array(G.nb).fill(-1), blank: (sq / n - mean * mean) < 64 };
+  }
+  function blockMode(sig, G, b) {
+    if (sig.modes[b] >= 0) return sig.modes[b];
+    var hist = new Uint16Array(64), x0 = (b % G.bx) * BS, y0 = ((b / G.bx) | 0) * BS;
+    var x1 = Math.min(G.w, x0 + BS), y1 = Math.min(G.h, y0 + BS), best = 0;
+    for (var y = y0; y < y1; y++) for (var x = x0; x < x1; x++) hist[sig.g[y * G.w + x] >> 2]++;
+    for (var i = 1; i < 64; i++) if (hist[i] > hist[best]) best = i;
+    return (sig.modes[b] = best * 4 + 2);
+  }
+  function grow(B, x, y) { if (x < B[0]) B[0] = x; if (y < B[1]) B[1] = y; if (x > B[2]) B[2] = x; if (y > B[3]) B[3] = y; }
+  function analyze(A, B, G, mask) {
+    var a = A.g, b = B.g, n = G.n, w = G.w, bo = G.blockOf;
+    var r = { C: 0, ap: 0, ds: 0, md: 0, apB: [1e9, 1e9, -1, -1], dsB: [1e9, 1e9, -1, -1] };
+    for (var i = 0; i < n; i++) {
+      var df = a[i] - b[i]; if (df < TH && df > -TH) continue;
+      var blk = bo[i]; if (mask[blk]) continue;
+      r.C++;
+      var oldBg = Math.abs(a[i] - blockMode(A, G, blk)) <= 18, newBg = Math.abs(b[i] - blockMode(B, G, blk)) <= 18;
+      if (oldBg && !newBg) { r.ap++; grow(r.apB, i % w, (i / w) | 0); }
+      else if (newBg && !oldBg) { r.ds++; grow(r.dsB, i % w, (i / w) | 0); }
+      else r.md++;
+    }
+    return r;
+  }
+  // a small thing vanished in one spot and the same-sized thing appeared somewhere else: a moving mouse pointer.
+  // Its size is remembered (ctx.ptr), so later a lone pointer appearing, vanishing or nudging in place is recognised too.
+  function isMovedPointer(r) {
+    if (!r.ap || !r.ds || r.ap > MOVED_MAX || r.ds > MOVED_MAX || r.md > 0.25 * r.C) return false;
+    var ratio = r.ap / r.ds; if (ratio < 0.33 || ratio > 3) return false;
+    var A = r.apB, D = r.dsB, gap = 3;
+    return A[2] + gap < D[0] || D[2] + gap < A[0] || A[3] + gap < D[1] || D[3] + gap < A[1];
+  }
+  function isPointerOnly(r, ctx) {
+    if (r.md > 0.25 * r.C + 4) return false;
+    if (isMovedPointer(r)) {
+      var w = (r.apB[2] - r.apB[0] + r.dsB[2] - r.dsB[0]) / 2 + 1, h = (r.apB[3] - r.apB[1] + r.dsB[3] - r.dsB[1]) / 2 + 1, px = (r.ap + r.ds) / 2;
+      var p = ctx.ptr;
+      ctx.ptr = p ? { px: p.px * 0.8 + px * 0.2, w: p.w * 0.8 + w * 0.2, h: p.h * 0.8 + h * 0.2, seen: p.seen + 1 } : { px: px, w: w, h: h, seen: 1 };
+      return true;
+    }
+    var P = ctx.ptr; if (!P || P.seen < 2) return false;
+    var B = [Math.min(r.apB[0], r.dsB[0]), Math.min(r.apB[1], r.dsB[1]), Math.max(r.apB[2], r.dsB[2]), Math.max(r.apB[3], r.dsB[3])];
+    if (B[2] < 0) return false;
+    return r.C <= 2.5 * P.px && (B[2] - B[0] + 1) <= 2 * P.w + 4 && (B[3] - B[1] + 1) <= 2 * P.h + 4;
+  }
+  function isNewScene(r, minPx, ctx) { return r.C >= minPx && !isPointerOnly(r, ctx); }
+  // only new content on empty background, nothing erased or rewritten.
+  // The slack is tiny (anti-aliased edges); the only bigger thing allowed to vanish is the mouse pointer once its size is known.
+  function isAdditive(r, ctx) {
+    if (!r.ap) return false;
+    var slack = Math.max(0.04 * r.C, 6), P = ctx && ctx.ptr;
+    if (P && P.seen >= 2 && r.ds > 0) {
+      var w = r.dsB[2] - r.dsB[0] + 1, h = r.dsB[3] - r.dsB[1] + 1;
+      if (r.ds <= 2.5 * P.px && w <= 2 * P.w + 4 && h <= 2 * P.h + 4) slack += r.ds;
+    }
+    return r.ds + r.md <= slack;
+  }
+
+  // blocks that keep changing between samples (presenter camera, captions, clocks) are learned and ignored
+  function blockChanges(A, B, G) {
+    var cnt = new Uint16Array(G.nb), a = A.g, b = B.g, bo = G.blockOf, hit = 0;
+    for (var i = 0; i < G.n; i++) { var df = a[i] - b[i]; if (df >= TH || df <= -TH) cnt[bo[i]]++; }
+    for (var k = 0; k < G.nb; k++) if (cnt[k] >= 32) hit++;
+    return { cnt: cnt, frac: hit / G.nb };
+  }
+  // prev: the current mask (a block stays ignored until it has been quiet for a while)
+  function buildMask(ema, G, job, prev) {
+    var nb = G.nb, bx = G.bx, by = G.by, m = new Uint8Array(nb), out = new Uint8Array(nb), c = 0, b, x, y;
+    for (b = 0; b < nb; b++) if (ema[b] >= 0.5 || (prev && prev.core && prev.core[b] && ema[b] >= 0.2)) m[b] = 1;
+    // a presenter camera or caption bar is a rectangle: fill each moving area's bounding box, plus one block around it
+    var seen = new Uint8Array(nb), stack = [];
+    for (b = 0; b < nb; b++) {
+      if (!m[b] || seen[b]) continue;
+      var size = 0, x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1; stack.push(b); seen[b] = 1;
+      while (stack.length) {
+        var cur = stack.pop(), cx = cur % bx, cy = (cur / bx) | 0; size++;
+        if (cx < x0) x0 = cx; if (cx > x1) x1 = cx; if (cy < y0) y0 = cy; if (cy > y1) y1 = cy;
+        for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
+          var nx = cx + dx, ny = cy + dy, nbk = ny * bx + nx;
+          if (nx >= 0 && nx < bx && ny >= 0 && ny < by && m[nbk] && !seen[nbk]) { seen[nbk] = 1; stack.push(nbk); }
+        }
+      }
+      // only areas at the edge of the picture (a presenter camera in a corner, a caption bar) are ignored;
+      // anything moving in the middle (handwriting, an animation on the slide) is content and is never ignored
+      var nearEdge = x0 <= 2 || y0 <= 2 || x1 >= bx - 3 || y1 >= by - 3;
+      if (!nearEdge || (x1 - x0 + 1) * (y1 - y0 + 1) > 0.3 * nb) continue;
+      var fill = (x1 - x0 + 1) * (y1 - y0 + 1) <= Math.max(4, 3 * size);
+      for (y = Math.max(0, y0 - 1); y <= Math.min(by - 1, y1 + 1); y++) for (x = Math.max(0, x0 - 1); x <= Math.min(bx - 1, x1 + 1); x++) {
+        if (fill) { out[y * bx + x] = 1; continue; }
+        for (var ey = -1; ey <= 1; ey++) for (var ex = -1; ex <= 1; ex++) { var sy = y + ey, sx = x + ex; if (sy >= y0 && sy <= y1 && sx >= x0 && sx <= x1 && m[sy * bx + sx]) { out[y * bx + x] = 1; } }
+      }
+    }
+    for (b = 0; b < nb; b++) c += out[b];
+    out.core = m;
+    if (c > 0.45 * nb) { job.maskPct = 0; job.maskOff = true; var none = new Uint8Array(nb); none.core = m; return none; }
+    job.maskPct = c / nb; job.maskOff = false;
+    return out;
   }
 
   // ---------- capture ----------
+  // A video file is cut into short pieces. One or more hidden players ("lanes") each take the next piece, jump through it
+  // and keep the screens that changed. Every finished piece is also written to this device's storage, so the work
+  // survives a closed tab: pick the same file again and it carries on. At the end all pieces are put in order and
+  // repeats across piece borders are removed.
+  var MOVE = 3, PIECE_MIN = 30, PIECE_MAX = 120, KEEP_MS = 72 * 3600e3;
+
+  // The comparison, with the mouse pointer taken out first. On a page full of text the pointer sits on top of letters,
+  // so "something appeared on empty background" can't spot it. Instead: the changed dots are grouped into spots, and two
+  // small spots of about the same size where the picture that left one spot is the picture that arrived at the other
+  // (the same arrow, moved) are left out. A changed digit or word is not the same picture in two places, so it stays.
+  function analyzeX(A, B, G, mask, pctx) {
+    var r = analyze(A, B, G, mask);
+    if (r.C < 8 || r.C > 1500) return r;
+    var a = A.g, b = B.g, w = G.w, h = G.h, n = G.n, bo = G.blockOf, cw = (w >> 2) + 1, chh = (h >> 2) + 1;
+    var cells = new Int32Array(cw * chh), i, df;
+    for (i = 0; i < n; i++) { df = a[i] - b[i]; if (df < TH && df > -TH) continue; if (mask[bo[i]]) continue; cells[((((i / w) | 0) >> 2) * cw) + ((i % w) >> 2)]++; }
+    var lab = new Int16Array(cw * chh).fill(-1), spots = [], stack = [];
+    for (var c = 0; c < cells.length; c++) {
+      if (!cells[c] || lab[c] >= 0) continue;
+      var id = spots.length; if (id > 30) return r;
+      spots.push({ x0: 1e9, y0: 1e9, x1: -1, y1: -1, px: 0 }); stack.push(c); lab[c] = id;
+      while (stack.length) {
+        var cur = stack.pop(), cx = cur % cw, cy = (cur / cw) | 0;
+        for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
+          var nx = cx + dx, ny = cy + dy, k = ny * cw + nx;
+          if (nx >= 0 && nx < cw && ny >= 0 && ny < chh && cells[k] && lab[k] < 0) { lab[k] = id; stack.push(k); }
+        }
+      }
+    }
+    for (i = 0; i < n; i++) {
+      df = a[i] - b[i]; if (df < TH && df > -TH) continue; if (mask[bo[i]]) continue;
+      var x = i % w, y = (i / w) | 0, sp = spots[lab[(y >> 2) * cw + (x >> 2)]];
+      sp.px++; if (x < sp.x0) sp.x0 = x; if (x > sp.x1) sp.x1 = x; if (y < sp.y0) sp.y0 = y; if (y > sp.y1) sp.y1 = y;
+    }
+    var small = spots.filter(function (s) { return s.x1 - s.x0 < 18 && s.y1 - s.y0 < 22 && s.px <= 200; });
+    if (small.length < 2) return r;
+    // what was at spot F before against what is at spot T after, best of small shifts: a moved arrow is the same picture
+    // in both (same colours, same change). Letters that changed in two places are not, unless they are the very same
+    // letters in the same style - and then only the spots where both match are left out.
+    function same(F, T) {
+      var best = 1e9;
+      for (var oy = -2; oy <= 2; oy++) for (var ox = -2; ox <= 2; ox++) {
+        var sum = 0, cnt = 0, hitT = 0;
+        for (var y = F.y0; y <= F.y1; y++) for (var x = F.x0; x <= F.x1; x++) {
+          var j = y * w + x, d0 = a[j] - b[j]; if (d0 < TH && d0 > -TH) continue;
+          var tx = T.x0 + (x - F.x0) + ox, ty = T.y0 + (y - F.y0) + oy; if (tx < 0 || ty < 0 || tx >= w || ty >= h) { sum += 255; cnt++; continue; }
+          // the arrow's own colours: before at F = after at T, and the change has the same direction at both
+          var k2 = ty * w + tx, d1 = b[k2] - a[k2]; sum += Math.max(Math.abs(a[j] - b[k2]), Math.abs(d0 - d1)); cnt++; if (d1 >= TH || d1 <= -TH) hitT++;
+        }
+        if (cnt >= 10 && hitT >= 0.7 * cnt && sum / cnt < best) best = sum / cnt;
+      }
+      return best;
+    }
+    var m2 = null;
+    for (var p = 0; p < small.length; p++) for (var q = p + 1; q < small.length; q++) {
+      var S = small[p], T = small[q];
+      if (Math.abs((S.x1 - S.x0) - (T.x1 - T.x0)) > 4 || Math.abs((S.y1 - S.y0) - (T.y1 - T.y0)) > 4) continue;
+      if (Math.abs(S.px - T.px) > 0.5 * Math.max(S.px, T.px)) continue;
+      // (two parts of one changed letter are close together; an arrow that was moved far enough to leave two spots is not)
+      if (Math.abs((S.x0 + S.x1) - (T.x0 + T.x1)) < 40 && Math.abs((S.y0 + S.y1) - (T.y0 + T.y1)) < 40) continue;
+      if (Math.min(same(S, T), same(T, S)) > 20) continue;
+      m2 = m2 || new Uint8Array(mask);
+      [S, T].forEach(function (sp) {
+        for (var yy = Math.max(0, (sp.y0 - 1) >> 4); yy <= Math.min(G.by - 1, (sp.y1 + 1) >> 4); yy++)
+          for (var xx = Math.max(0, (sp.x0 - 1) >> 4); xx <= Math.min(G.bx - 1, (sp.x1 + 1) >> 4); xx++) m2[yy * G.bx + xx] = 1;
+      });
+    }
+    return m2 ? analyze(A, B, G, m2) : r;
+  }
+
+  // One lane's eyes and memory: reads the picture the video shows now, decides whether it is a new screen, takes the photo.
+  // o: { minPx, useCam, useCaps, doMerge, dedup, q, onNew(scene), onMerge(scene) }
+  function makeCapturer(G, video, full, fctx, o) {
+    var small = document.createElement("canvas"); small.width = G.w; small.height = G.h;
+    var sctx = small.getContext("2d", { willReadFrequently: true }); sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = "medium";
+    var minPx = o.minPx, useCam = o.useCam, useCaps = o.useCaps, useMask = useCam || useCaps, doMerge = o.doMerge, dedup = o.dedup, settle = 5;
+    var C = { mask: new Uint8Array(G.nb), raw: null, scenes: [], kept: [], pctx: { ptr: null }, prevSig: null, prevT: 0, pending: null, bad: false,
+      samples: 0, blanks: 0, skips: 0, merges: 0, start: 0, maskPct: 0 };
+    // one more block around each ignored area: the frame and shoulders of a camera picture move less often than the face
+    function widen(m) {
+      var bx = G.bx, by = G.by, out = new Uint8Array(G.nb), x, y, dx, dy, c = 0;
+      for (y = 0; y < by; y++) for (x = 0; x < bx; x++) {
+        if (!m[y * bx + x]) continue;
+        for (dy = -1; dy <= 1; dy++) for (dx = -1; dx <= 1; dx++) { var nx = x + dx, ny = y + dy; if (nx >= 0 && nx < bx && ny >= 0 && ny < by) out[ny * bx + nx] = 1; }
+      }
+      for (x = 0; x < G.nb; x++) c += out[x];
+      C.maskPct = c / G.nb;
+      return out;
+    }
+    function snap() {
+      fctx.drawImage(video, 0, 0, full.width, full.height);
+      return toBlob(full, o.q);
+    }
+    // Two kinds of things keep changing by themselves:
+    //  - a presenter camera: changes between almost every two looks a quarter second apart (even a nearly still one),
+    //    while a slide only changes now and then. Looks further apart can't tell those two apart.
+    //  - burned-in captions (lower part of the picture): a new line every few seconds while the rest stays.
+    // A new slide or a scroll changes most of the picture at once and is not counted. Only areas along the edge
+    // of the picture are ever ignored (see buildMask), so handwriting or animation on the slide itself is kept.
+    var seenC = new Float32Array(G.nb), hitC = new Float32Array(G.nb), capScore = new Float32Array(G.nb);
+    var onNow = new Uint8Array(G.nb), feed = new Float32Array(G.nb), capRow = Math.floor(G.by * 0.65);
+    function learnMoving(sig, t) {
+      if (useMask && C.prevSig) {
+        var ch = blockChanges(C.prevSig, sig, G), dt = Math.abs(t - C.prevT), close = dt <= 0.4, fade = Math.exp(-Math.min(dt, 30) / 30);
+        if (ch.frac < 0.15) {
+          for (var b = 0; b < G.nb; b++) {
+            var hit = ch.cnt[b] >= MOVE ? 1 : 0;
+            if (close) { seenC[b] = seenC[b] * 0.98 + 1; hitC[b] = hitC[b] * 0.98 + hit; }
+            // captions: how many times this block changed on its own lately (fades out over about 30 s of video)
+            capScore[b] = useCaps ? capScore[b] * fade + ((b / G.bx | 0) >= capRow && ch.cnt[b] >= 12 ? 1 : 0) : 0;
+            var rc = useCam && seenC[b] >= 8 ? hitC[b] / seenC[b] : 0;
+            if (rc >= 0.36 || capScore[b] >= 2.5) onNow[b] = 1; else if (rc < 0.28 && capScore[b] < 0.8) onNow[b] = 0;
+            feed[b] = onNow[b];
+          }
+          C.raw = buildMask(feed, G, {}, null); C.mask = widen(C.raw);
+        }
+      }
+      C.prevSig = sig; C.prevT = t;
+    }
+    function look() {
+      var sig;
+      try { sig = readSig(sctx, G, video); } catch (e) { C.bad = true; return null; }
+      C.samples++; if (sig.blank) C.blanks++;
+      return sig;
+    }
+    // learning only: which parts keep moving and how big the mouse pointer is - nothing is kept
+    C.learn = function (t) {
+      var sig = look(); if (!sig) return;
+      var before = C.prevSig;
+      learnMoving(sig, t);
+      if (before) { try { isPointerOnly(analyze(before, sig, G, C.mask), C.pctx); } catch (e) {} }
+    };
+    // another lane starts with what this one has learned
+    C.adopt = function (from) {
+      var L = from.learned(); seenC.set(L.seenC); hitC.set(L.hitC); onNow.set(L.onNow);
+      C.mask = new Uint8Array(from.mask); C.maskPct = from.maskPct;
+      C.pctx.ptr = from.pctx.ptr ? Object.assign({}, from.pctx.ptr) : null;
+    };
+    C.learned = function () { return { seenC: seenC, hitC: hitC, onNow: onNow }; };
+    C.reset = function (start) { C.scenes = []; C.kept = []; C.pending = null; C.prevSig = null; C.start = start; C.skips = 0; C.merges = 0; };
+    C.step = function (t) {
+      var sig = look(); if (!sig) return;
+      learnMoving(sig, t);
+      var kept = C.kept, mask = C.mask, pctx = C.pctx;
+      if (!dedup) {
+        var sc0 = { t: t, ts: t, sig: sig, blobP: snap() };
+        C.scenes.push(sc0); if (o.onNew) o.onNew(sc0);
+        return;
+      }
+      var last = kept.length ? kept[kept.length - 1] : null;
+      if (last && !isNewScene(analyzeX(last.sig, sig, G, mask, pctx), minPx, pctx)) { C.pending = null; C.skips++; return; }
+      // a new screen counts once it holds still for two looks in a row (the second look comes a quarter second after the first);
+      // while it keeps changing (scrolling, an animation) it is followed, and photographed after 5 s at the latest
+      if (!C.pending) { C.pending = { sig: sig, t: t, n: 0 }; return; }
+      if (isNewScene(analyzeX(C.pending.sig, sig, G, mask, pctx), minPx, pctx) && t - C.pending.t < settle) { C.pending.sig = sig; C.pending.n++; return; }
+      var t0 = t - C.pending.t > 1.5 ? t : C.pending.t; C.pending = null;
+      commit(sig, t0, t);
+    };
+    // the piece is over while a new screen was still waiting for its second look: keep it as it is
+    // (the video still shows that very look, so the photo matches)
+    C.flush = function (t) {
+      if (!C.pending) return;
+      var p = C.pending; C.pending = null;
+      commit(p.sig, p.t, t);
+    };
+    function commit(sig, t0, ts) {
+      var kept = C.kept, mask = C.mask, pctx = C.pctx, last = kept.length ? kept[kept.length - 1] : null;
+      for (var hh = kept.length - 1; hh >= 0 && hh >= kept.length - 12; hh--) {
+        if (!isNewScene(analyzeX(kept[hh].sig, sig, G, mask, pctx), minPx, pctx)) { C.skips++; return; }
+      }
+      // a plain one-colour screen (black fade, erased board) carries no information: don't save it
+      if (sig.blank) { C.skips++; return; }
+      var blobP = snap();
+      if (doMerge && last && isAdditive(analyzeX(last.sig, sig, G, mask, pctx), pctx)) {
+        // the new screen only adds to the last photo: replace that photo with the fuller one
+        last.scene.blobP = blobP; last.scene.sig = sig; last.scene.ts = ts; last.sig = sig; C.merges++;
+        if (o.onMerge) o.onMerge(last.scene);
+      } else {
+        var sc = { t: t0, ts: ts, sig: sig, blobP: blobP };
+        C.scenes.push(sc); kept.push({ sig: sig, scene: sc }); if (kept.length > 12) kept.shift();
+        if (o.onNew) o.onNew(sc);
+      }
+    }
+    return C;
+  }
+
+  // all pieces' scenes in time order, repeats across piece borders removed. parts: [{ start, mask, pctx, scenes:[{t, ts, sig, blob}] }]
+  function finalPass(G, parts, o, tally) {
+    var all = [];
+    if (!o.dedup) {
+      var lastT = -1e9;
+      parts.forEach(function (P) { P.scenes.forEach(function (sc) { all.push(sc); }); });
+      all.sort(function (a, b) { return a.t - b.t; });
+      return all.filter(function (sc) { if (sc.t - lastT < Math.max(0.2, o.step * 0.5)) return false; lastT = sc.t; return true; });
+    }
+    // two scenes are compared ignoring only what was moving around either of them (not everything that ever moved)
+    var pair = {}, most = new Uint8Array(G.nb), votes = new Uint16Array(G.nb);
+    parts.forEach(function (P) { for (var b = 0; b < G.nb; b++) if (P.mask[b]) votes[b]++; });
+    for (var vb = 0; vb < G.nb; vb++) if (parts.length >= 2 && votes[vb] * 2 >= parts.length) most[vb] = 1;
+    function maskOf(x, y) {
+      var lo = Math.min(x.pi, y.pi), hi = Math.max(x.pi, y.pi), key = lo + "_" + hi;
+      if (!pair[key]) { var m = new Uint8Array(G.nb), ma = parts[lo].mask, mb = parts[hi].mask; for (var b = 0; b < G.nb; b++) if (ma[b] || mb[b] || most[b]) m[b] = 1; pair[key] = m; }
+      return pair[key];
+    }
+    // a piece's opening scene repeats what the piece before already saw: mark it
+    parts.forEach(function (P, k) {
+      P.scenes.forEach(function (sc) { sc.pi = k; sc.border = k > 0 && sc.t < P.start + 1.5; all.push(sc); });
+    });
+    all.sort(function (a, b) { return a.t - b.t; });
+    // reuse the mouse-pointer size the pieces learned, so a pointer that moved is not taken for a new scene at piece borders
+    var best = null;
+    parts.forEach(function (P) { var q = P.pctx && P.pctx.ptr; if (q && (!best || q.seen > best.seen)) best = q; });
+    var out = [], kept = [], pctx = { ptr: best ? Object.assign({}, best) : null }, minPx = o.minPx;
+    function fuller(last, sc) { last.out.blob = sc.blob; last.out.ts = sc.ts; last.out.sig = sc.sig; last.sig = sc.sig; last.pi = sc.pi; if (tally) tally.merged++; }
+    all.forEach(function (sc) {
+      var last = kept.length ? kept[kept.length - 1] : null;
+      if (sc.border && last) {
+        // same moment seen twice: keep the fuller picture if something was added, otherwise drop the repeat
+        var rb = analyzeX(last.sig, sc.sig, G, maskOf(last, sc), pctx);
+        if (o.doMerge && isAdditive(rb, pctx)) { fuller(last, sc); return; }
+        if (!isNewScene(rb, minPx * 1.5, pctx)) return;
+      }
+      for (var i = kept.length - 1; i >= 0 && i >= kept.length - 12; i--) {
+        if (!isNewScene(analyzeX(kept[i].sig, sc.sig, G, maskOf(kept[i], sc), pctx), minPx, pctx)) { if (tally && !sc.border) tally.skipped++; return; }
+      }
+      if (o.doMerge && last && isAdditive(analyzeX(last.sig, sc.sig, G, maskOf(last, sc), pctx), pctx)) { fuller(last, sc); return; }
+      var one = { t: sc.t, ts: sc.ts, sig: sc.sig, blob: sc.blob };
+      out.push(one); kept.push({ sig: sc.sig, out: one, pi: sc.pi }); if (kept.length > 12) kept.shift();
+    });
+    return out;
+  }
+
+  // ---------- what is kept on this device (so a closed tab is not lost work) ----------
+  var dbP = null;
+  function db() {
+    return dbP || (dbP = new Promise(function (res) {
+      try {
+        var rq = indexedDB.open("lecture-capture-files", 1);
+        rq.onupgradeneeded = function () { rq.result.createObjectStore("kv"); };
+        rq.onsuccess = function () { res(rq.result); };
+        rq.onerror = rq.onblocked = function () { res(null); };
+      } catch (e) { res(null); }
+    }));
+  }
+  function dbDo(mode, fn) {
+    return db().then(function (d) {
+      if (!d) return null;
+      return new Promise(function (res) {
+        try {
+          var tx = d.transaction("kv", mode), rq = fn(tx.objectStore("kv"));
+          tx.oncomplete = function () { res(rq && rq.result !== undefined ? rq.result : null); };
+          tx.onerror = tx.onabort = function () { res(null); };
+        } catch (e) { res(null); }
+      });
+    }).catch(function () { return null; });
+  }
+  function dbPut(k, v) { return dbDo("readwrite", function (st) { return st.put(v, k); }); }
+  function dbGet(k) { return dbDo("readonly", function (st) { return st.get(k); }); }
+  function dbDel(k) { return dbDo("readwrite", function (st) { return st.delete(k); }); }
+  function dbRange(prefix) { return IDBKeyRange.bound(prefix, prefix + "￿"); }
+  function dbAll(prefix) { return dbDo("readonly", function (st) { return st.getAll(dbRange(prefix)); }); }
+  function dbDelAll(prefix) { return dbDo("readwrite", function (st) { return st.delete(dbRange(prefix)); }); }
+  // the same file picked again is recognised by its name, size and date
+  function fileKey(f) {
+    var s = f.name + "|" + f.size + "|" + (f.lastModified || 0), h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0).toString(36) + "-" + f.size.toString(36);
+  }
+  // what a saved piece was made with: only pieces made with the same settings can be reused
+  function prefKey() { return ["f2", state.interval, state.skipDup, state.ignoreMoving, state.merge, state.minPx, state.maxW].join("|"); }
+  function forget(key) { return Promise.all([dbDel("meta:" + key), dbDelAll("piece:" + key + ":")]); }
+  function pad(n, w) { return String(n).padStart(w, "0"); }
+  // is there unfinished work for this file (with the settings as they are now)?
+  async function savedFor(job) {
+    var meta = await dbGet("meta:" + job.key);
+    if (!meta || Date.now() - (meta.at || 0) > KEEP_MS) return null;
+    return { meta: meta, same: meta.pkey === prefKey(), pct: meta.n ? Math.round(100 * (meta.doneN || 0) / meta.n) : 0 };
+  }
+  async function noteSaved(job) {
+    if (job.status !== "waiting") return;
+    var s = await savedFor(job);
+    if (job.status !== "waiting") return;
+    job.hasSaved = !!(s && s.same && s.pct > 0);
+    if (job.hasSaved) job.msg = s.pct >= 100 ? "지난번에 끝까지 찍어 둔 영상이에요. 시작하면 바로 마무리해요." : "지난번에 " + s.pct + "%까지 했어요. 시작하면 거기서부터 이어서 해요.";
+    else if (s && !s.same && s.pct > 0) job.msg = "지난번(" + s.pct + "%)과 설정이 달라서 처음부터 해요. 이어서 하려면 설정을 지난번처럼 맞춰 주세요.";
+    else job.msg = "";
+    renderJob(job);
+  }
+  async function showUnfinished() {
+    var metas = (await dbAll("meta:")) || [], keep = [];
+    for (var i = 0; i < metas.length; i++) {
+      var m = metas[i];
+      if (!m || !m.fkey) continue;
+      if (Date.now() - (m.at || 0) > KEEP_MS || !(m.doneN > 0)) { await forget(m.fkey); continue; }
+      keep.push(m);
+    }
+    var box = $("#resumeNote"); if (!box) return;
+    box.hidden = !keep.length; if (!keep.length) return;
+    $("#resumeList").textContent = keep.map(function (m) { return m.name + " (" + (m.doneN >= m.n ? "ZIP 저장 전" : Math.round(100 * m.doneN / m.n) + "%") + ")"; }).join(", ");
+  }
+
+  function openVideo(url, ms) {
+    var v = document.createElement("video");
+    v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.setAttribute("muted", ""); v.preload = "auto";
+    v.src = url;
+    return waitEvent(v, "loadedmetadata", "error", ms).then(function () {
+      return v.readyState < 2 ? waitEvent(v, "loadeddata", "error", ms / 2).catch(function () {}) : null;
+    }).then(function () {
+      return v.play().then(function () { v.pause(); }, function () {});
+    }).then(function () { return v; }, function () { closeVideo(v); return null; });
+  }
+  function closeVideo(v) { try { v.removeAttribute("src"); v.load(); } catch (e) {} }
+  // how many players read the file at once: a phone has few video decoders, a PC has cores to spare
+  function laneCount(vw, vh) {
+    var ua = navigator.userAgent || "", cores = navigator.hardwareConcurrency || 4, mem = navigator.deviceMemory || 4, big = vw * vh > 1920 * 1080 * 1.2;
+    if (typeof window.__lcLanes === "number") return window.__lcLanes;
+    if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return 1;
+    if (/Android|Mobile/i.test(ua)) return mem <= 2 || cores < 4 || big ? 1 : (mem >= 8 && cores >= 8 ? 3 : 2);
+    return Math.max(1, Math.min(big ? 3 : 6, Math.floor(cores / 2)));
+  }
+
   async function processJob(job) {
-    job.status = "running"; job.images = []; job.skipped = 0; job.missed = 0; job.pos = 0; job.saved = false;
+    job.status = "running"; job.images = []; job.skipped = 0; job.missed = 0; job.merged = 0; job.maskPct = 0; job.maskOff = false;
+    job.pos = 0; job.pos0 = 0; job.count = 0; job.saved = false; job.phase = ""; job.hasSaved = false;
     job.msg = "영상을 여는 중…"; job.err = false; job.started = Date.now(); job.finished = 0;
-    job.thumbs.forEach(function (u) { URL.revokeObjectURL(u); }); job.thumbs = [];
+    if (job.zipUrl) { URL.revokeObjectURL(job.zipUrl); job.zipUrl = null; }
+    job.thumbs.forEach(function (th) { URL.revokeObjectURL(th.url); }); job.thumbs = [];
     job.ui.thumbs.textContent = ""; job.ui.track.querySelectorAll(".tick").forEach(function (t) { t.remove(); });
     renderJob(job);
 
-    var v = document.createElement("video");
-    v.muted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.setAttribute("muted", ""); v.preload = "auto";
-    var url = URL.createObjectURL(job.file);
-    v.src = url;
-    try {
-      await waitEvent(v, "loadedmetadata", "error", 60000);
-      if (v.readyState < 2) { try { await waitEvent(v, "loadeddata", "error", 30000); } catch (e) {} }
-    } catch (e) {
-      return fail(job, v, url, "이 기기에서 열 수 없는 영상 형식이에요. 컴퓨터용 스크립트로 처리해 주세요.");
-    }
-    try { await v.play(); v.pause(); } catch (e) {}
-    var dur = v.duration, vw = v.videoWidth, vh = v.videoHeight;
-    if (!isFinite(dur) || dur <= 0 || !vw || !vh) return fail(job, v, url, "영상 길이나 화면 크기를 읽지 못했어요. 파일이 손상됐을 수 있어요.");
+    var url = URL.createObjectURL(job.file), lanes = [];
+    function closeAll() { closeVideo(v0); lanes.forEach(function (L) { closeVideo(L.v); }); URL.revokeObjectURL(url); }
+    var v0 = await openVideo(url, 60000);
+    if (!v0) { URL.revokeObjectURL(url); return fail(job, "이 기기에서 열 수 없는 영상 형식이에요. 컴퓨터용 스크립트로 처리해 주세요."); }
+    var dur = v0.duration, vw = v0.videoWidth, vh = v0.videoHeight;
+    if (!isFinite(dur) || dur <= 0 || !vw || !vh) { closeVideo(v0); URL.revokeObjectURL(url); return fail(job, "영상 길이나 화면 크기를 읽지 못했어요. 파일이 손상됐을 수 있어요."); }
     job.duration = dur; job.msg = ""; renderJob(job);
 
-    var scale = state.maxW && vw > state.maxW ? state.maxW / vw : 1;
-    var full = document.createElement("canvas"); full.width = Math.round(vw * scale); full.height = Math.round(vh * scale);
-    var fctx = full.getContext("2d");
-    var sw = 320, sh = Math.max(1, Math.round(320 * vh / vw));
-    var small = document.createElement("canvas"); small.width = sw; small.height = sh;
-    var sctx = small.getContext("2d", { willReadFrequently: true });
-    sctx.imageSmoothingEnabled = true; sctx.imageSmoothingQuality = "medium";
-    var n = sw * sh, last = null, step = state.interval, ratio = state.ratio, skipDup = state.skipDup, q = state.quality;
-    var lastPaint = 0;
-
-    for (var t = 0; t <= dur + 0.001; t += step) {
-      if (state.stopReq) break;
-      var target = Math.min(t, Math.max(0, dur - 0.05));
-      if (Math.abs(v.currentTime - target) < 0.001) target = Math.min(target + 0.04, Math.max(0, dur - 0.01));
-      var ok = false;
-      for (var attempt = 0; attempt < 4 && !ok && !state.stopReq; attempt++) {
-        await waitVisible();
-        ok = await seekTo(v, target, 15000);
-      }
-      if (state.stopReq) break;
-      job.pos = t;
-      if (!ok) { job.missed++; continue; }
-
-      sctx.drawImage(v, 0, 0, sw, sh);
-      var d = sctx.getImageData(0, 0, sw, sh).data;
-      var gray = new Uint8Array(n);
-      for (var i = 0, p = 0; i < n; i++, p += 4) gray[i] = (d[p] * 77 + d[p + 1] * 150 + d[p + 2] * 29) >> 8;
-
-      var keep = true;
-      if (skipDup && last) {
-        var changed = 0, limit = ratio * n;
-        for (var k = 0; k < n; k++) { var df = gray[k] - last[k]; if (df > 25 || df < -25) { if (++changed >= limit) break; } }
-        keep = changed >= limit;
-      }
-      if (keep) {
-        fctx.drawImage(v, 0, 0, full.width, full.height);
-        var blob = await toBlob(full, q);
-        if (blob) {
-          var num = String(job.images.length + 1).padStart(4, "0");
-          job.images.push({ name: num + "_" + fmt(t) + ".jpg", blob: blob, t: t });
-          last = gray; addTick(job, t); addThumb(job, blob, t);
-        }
-      } else {
-        job.skipped++;
-      }
+    var scale = state.maxW && vw > state.maxW ? state.maxW / vw : 1, G = makeGeom(vw, vh), lastPaint = 0;
+    var step = state.interval, dedup = state.skipDup;
+    var o = { minPx: state.minPx, useCam: dedup && state.ignoreMoving, useCaps: dedup && state.ignoreMoving, doMerge: dedup && state.merge, dedup: dedup, q: state.quality, step: step,
+      onNew: function (sc) { job.count++; addTick(job, sc.t); sc.blobP.then(function (b) { if (b && job.status === "running") addThumb(job, b, sc.t, sc); }); },
+      onMerge: function (sc) { sc.blobP.then(function (b) { if (b && job.status === "running") replaceThumb(job, sc, b); }); } };
+    // every so often four looks a quarter second apart: that is how a presenter camera is told from a slide
+    var bursts = o.useCam, burstEvery = Math.max(40, step * 8);
+    function addLane(v) {
+      var full = document.createElement("canvas"); full.width = Math.round(vw * scale); full.height = Math.round(vh * scale);
+      var L = { v: v, C: makeCapturer(G, v, full, full.getContext("2d"), o), pc: null, burstAt: 0, miss: 0 };
+      lanes.push(L); return L;
+    }
+    async function paint(force) {
       var now = Date.now();
-      if (now - lastPaint > 250) { lastPaint = now; renderJob(job); refreshBar(); await nextFrame(); }
+      if (force || now - lastPaint > 250) {
+        lastPaint = now;
+        var pos = 0, mp = 0, sk = 0, mg = 0;
+        pieces.forEach(function (p) { pos += p.pos - p.start; if (p.state === 2 && p.rec) { sk += p.rec.skips || 0; mg += p.rec.merges || 0; } });
+        lanes.forEach(function (L) { if (L.C.maskPct > mp) mp = L.C.maskPct; if (L.pc && L.pc.state === 1) { sk += L.C.skips; mg += L.C.merges; } });
+        job.pos = Math.min(dur, pos); job.maskPct = mp; job.skipped = sk; job.merged = mg;
+        renderJob(job); refreshBar(); await nextFrame();
+      }
+    }
+    async function goTo(v, time) {
+      var target = Math.min(Math.max(0, time), Math.max(0, dur - 0.05));
+      if (Math.abs(v.currentTime - target) < 0.001) target = Math.min(target + 0.04, Math.max(0, dur - 0.01));
+      for (var attempt = 0; attempt < 4 && !state.stopReq; attempt++) {
+        await waitVisible();
+        if (await seekTo(v, target, 15000)) return true;
+      }
+      return false;
     }
 
-    v.removeAttribute("src"); v.load(); URL.revokeObjectURL(url);
+    // the pieces, and what is already done (from before a stop in this page, or from the device's storage)
+    var pieceLen = Math.max(PIECE_MIN, Math.min(PIECE_MAX, Math.ceil(dur / 8))), pieces = [];
+    for (var s = 0, pi = 0; s < dur - 0.001; s += pieceLen, pi++) pieces.push({ i: pi, start: s, end: Math.min(dur, s + pieceLen), pos: s, state: 0, rec: null });
+    if (pieces.length > 1 && pieces[pieces.length - 1].end - pieces[pieces.length - 1].start < 5) { pieces.pop(); pieces[pieces.length - 1].end = dur; }
+    var key = job.key, pkey = prefKey() + "|" + pieceLen + "|" + pieces.length;
+    var meta = await dbGet("meta:" + key);
+    var usable = meta && meta.pkey === prefKey() && meta.full === pkey && Math.abs((meta.dur || 0) - dur) < 0.5 && Date.now() - (meta.at || 0) < KEEP_MS;
+    if (job.recs && job.recsKey === pkey) pieces.forEach(function (p) { if (job.recs[p.i]) { p.rec = job.recs[p.i]; } });
+    else { job.recs = {}; job.recsKey = pkey; }
+    if (usable) {
+      ((await dbAll("piece:" + key + ":")) || []).forEach(function (rec) {
+        var p = pieces[rec.i]; if (p && !p.rec && rec.start === p.start && rec.end === p.end && rec.mask && rec.scenes) p.rec = rec;
+      });
+    } else await dbDelAll("piece:" + key + ":");
+    pieces.forEach(function (p) {
+      if (!p.rec) return;
+      p.state = 2; p.pos = p.end; job.recs[p.i] = p.rec; job.count += p.rec.scenes.length;
+      p.rec.scenes.forEach(function (sc) { addTick(job, sc.t); });
+    });
+    var doneN = function () { return pieces.filter(function (p) { return p.state === 2; }).length; };
+    var writeMeta = function (done) { return dbPut("meta:" + key, { fkey: key, name: job.file.name, size: job.file.size, dur: dur, pkey: prefKey(), full: pkey, n: pieces.length, doneN: doneN(), done: !!done, at: Date.now() }); };
+    await writeMeta(false);
+    var todo = pieces.length - doneN();
+    pieces.forEach(function (p) { job.pos0 += p.pos - p.start; }); job.pos = job.pos0;
+    if (job.pos0 > 0 && todo) { job.msg = "지난번에 한 곳(" + Math.round(100 * job.pos0 / dur) + "%)부터 이어서 해요."; }
+    await paint(true);
+
+    var failed = "";
+    if (todo) {
+      var L0 = addLane(v0), want = Math.min(laneCount(vw, vh), todo);
+      // 1) look at a few short stretches first to learn which parts of the screen never stop moving (and the pointer's size)
+      if (bursts && dur >= 30) {
+        job.phase = "움직이는 부분 확인 중…"; await paint(true);
+        var spots = [0.12, 0.32, 0.52, 0.72, 0.9];
+        for (var si = 0; si < spots.length && !state.stopReq && !L0.C.bad; si++) {
+          L0.C.prevSig = null;
+          for (var j = 0; j < 4 && !state.stopReq; j++) { var lt = spots[si] * dur + j * 0.25; if (!(await goTo(v0, lt))) break; L0.C.learn(lt); }
+        }
+        L0.C.prevSig = null; job.phase = "";
+      }
+      // more lanes, if this device lets several players read the file at once
+      for (var li = 1; li < want && !state.stopReq; li++) {
+        var vx = await openVideo(url, 20000);
+        if (!vx) break;
+        addLane(vx).C.adopt(L0.C);
+      }
+      job.lanes = lanes.length;
+      // 2) every lane takes the next piece until none is left
+      var take = function () { for (var k = 0; k < pieces.length; k++) if (pieces[k].state === 0) { pieces[k].state = 1; return pieces[k]; } return null; };
+      var runLane = async function (L) {
+        for (;;) {
+          if (state.stopReq || failed) return;
+          var pc = take(); if (!pc) return;
+          L.pc = pc;
+          var C = L.C, v = L.v, t = pc.start, grid = pc.start, burst = 0, lastT = -1, hardEnd = Math.min(dur, pc.end + 3);
+          C.reset(pc.start); L.burstAt = pc.start + burstEvery / 2;
+          while (!state.stopReq && !C.bad && !failed) {
+            if (t >= pc.end && !(C.pending && t < hardEnd)) break;
+            var ok = await goTo(v, t);
+            if (state.stopReq) break;
+            if (!ok) { job.missed++; if (++L.miss >= 6 && C.samples === 0) { failed = "영상을 읽지 못했어요. 파일이 손상됐을 수 있어요."; break; } t += 0.5; continue; }
+            C.step(t); lastT = t;
+            pc.pos = Math.max(pc.pos, Math.min(pc.end, t));
+            if (bursts && t >= L.burstAt) { burst = 4; L.burstAt = t + burstEvery; }
+            // The regular looks stay on their beat (start, +step, +2 step, ...). A look that found something new gets a second
+            // look a quarter second later (then every half second while the screen keeps moving): those are extra and do not
+            // push the beat back, so no stretch of video longer than the chosen interval goes unseen.
+            if (burst > 0) { burst--; t += 0.25; }
+            else if (C.pending) t += C.pending.n ? 0.5 : 0.25;
+            else { while (grid <= t + 0.01) grid += step; t = grid; }
+            await paint();
+          }
+          if (C.bad) { failed = "이 브라우저에서는 영상 화면을 읽지 못해요. 크롬이나 Edge로 열어 주세요."; }
+          if (state.stopReq || failed) return;
+          // the video's closing screen
+          if (pc.end >= dur - 0.001 && lastT < dur - 0.3 && (await goTo(v, dur))) { C.step(dur); lastT = dur; }
+          C.flush(lastT);
+          var rec = await pack(C, pc);
+          pc.rec = rec; pc.state = 2; pc.pos = pc.end; L.pc = null; job.recs[pc.i] = rec;
+          dbPut("piece:" + key + ":" + pad(pc.i, 5), rec).then(function () { return writeMeta(false); });
+          await paint(true);
+        }
+      };
+      await Promise.all(lanes.map(runLane));
+    }
+
+    // a piece as it is kept: its scenes with their pictures, and what was being ignored around it
+    async function pack(C, pc) {
+      var scenes = [];
+      for (var i = 0; i < C.scenes.length; i++) {
+        var sc = C.scenes[i], b = await sc.blobP;
+        if (b) scenes.push({ t: sc.t, ts: sc.ts, g: sc.sig.g, blank: !!sc.sig.blank, blob: b });
+      }
+      return { i: pc.i, start: pc.start, end: pc.end, mask: new Uint8Array(C.mask), ptr: C.pctx.ptr ? Object.assign({}, C.pctx.ptr) : null, scenes: scenes, skips: C.skips, merges: C.merges, samples: C.samples };
+    }
+
+    // 3) put everything in order (after a stop: what there is so far, so it can still be saved)
+    var recs = pieces.filter(function (p) { return p.state === 2; }).map(function (p) { return p.rec; });
+    if (state.stopReq || failed) {
+      for (var q = 0; q < lanes.length; q++) if (lanes[q].pc && lanes[q].pc.state === 1) { recs.push(await pack(lanes[q].C, lanes[q].pc)); lanes[q].pc.state = 0; lanes[q].pc.pos = lanes[q].pc.start; }
+      recs.sort(function (a, b) { return a.start - b.start; });
+    }
+    var skips = 0, merges = 0;
+    recs.forEach(function (rec) { skips += rec.skips || 0; merges += rec.merges || 0; });
+    closeAll();
+    var tally = { skipped: 0, merged: 0 };
+    var parts = recs.map(function (rec) {
+      return { start: rec.start, mask: rec.mask, pctx: { ptr: rec.ptr }, scenes: rec.scenes.map(function (sc) {
+        return { t: sc.t, ts: sc.ts, blob: sc.blob, sig: { g: sc.g, blank: sc.blank, modes: new Int16Array(G.nb).fill(-1) } };
+      }) };
+    });
+    var scenes = finalPass(G, parts, o, tally);
+    job.images = scenes.map(function (sc, i) { return { name: pad(i + 1, 4) + "_" + fmt(sc.t) + ".jpg", blob: sc.blob, t: sc.t }; });
+    job.skipped = skips + tally.skipped; job.merged = merges + tally.merged;
+    job.ui.track.querySelectorAll(".tick").forEach(function (t) { t.remove(); });
+    job.images.forEach(function (im) { addTick(job, im.t); });
+    if (job.images.length) {
+      job.thumbs.forEach(function (th) { th.fig.remove(); URL.revokeObjectURL(th.url); }); job.thumbs = [];
+      job.images.slice(-4).forEach(function (im) { addThumb(job, im.blob, im.t, im); });
+    }
     job.finished = Date.now();
-    if (state.stopReq) { job.status = "stopped"; job.msg = "중단했어요. 지금까지 찍은 사진은 저장할 수 있어요. 다시 시작하면 이 영상은 처음부터 다시 합니다."; }
-    else { job.status = "done"; job.pos = dur; job.msg = job.missed ? "일부 지점은 영상이 손상돼 건너뛰었어요." : ""; }
+    if (failed && !job.images.length) { job.status = "failed"; job.msg = failed; job.err = true; }
+    else if (state.stopReq || failed) {
+      job.status = "stopped"; job.pos = 0; pieces.forEach(function (p) { job.pos += p.pos - p.start; });
+      job.msg = (failed ? failed + " " : "중단했어요. ") + "지금까지 찍은 사진은 저장할 수 있어요. '다시 시작'을 누르면 멈춘 곳부터 이어서 해요."; job.err = !!failed;
+      job.hasSaved = doneN() > 0;
+    } else {
+      job.status = "done"; job.pos = dur; job.msg = job.missed ? "일부 지점은 영상이 손상돼 건너뛰었어요." : "";
+      job.recs = null;   // (the pieces stay in the device's storage until the ZIP has been taken)
+      if (job.images.length) await writeMeta(true);
+      else { await forget(key); job.msg = "저장할 장면이 없어요. 화면이 처음부터 끝까지 한 가지 색인 영상이에요."; }
+    }
     renderJob(job); refreshBar();
   }
 
-  function fail(job, v, url, text) {
-    try { v.removeAttribute("src"); v.load(); } catch (e) {}
-    URL.revokeObjectURL(url);
+  function fail(job, text) {
     job.status = "failed"; job.msg = text; job.err = true; job.finished = Date.now();
     renderJob(job); refreshBar();
   }
@@ -528,9 +1209,443 @@ details.panel[open] summary::after { content: " －"; }
       var job = state.jobs[i];
       if (job.status !== "waiting" && job.status !== "stopped") continue;
       if (state.stopReq) break;
-      await processJob(job);
+      if (job.kind === "yt") await processYouTube(job); else await processJob(job);
     }
+    closeStage();
     state.running = false; lockSettings(false); $("#keepOn").hidden = true; releaseWake(); refreshBar();
+  }
+
+  // ---------- YouTube links (the GitHub page on a PC browser) ----------
+  // No video file is downloaded: the official YouTube player plays the video inside this page,
+  // and the page watches its own tab (screen sharing of "this tab") and keeps the changed scenes.
+  var hooks = window.__lcHooks || null;
+  var inClaude = false;
+  // The screen-sharing way of capturing a YouTube link from this page is switched off: the extension / userscript
+  // (its own panel on this page) does that job faster and without sharing the screen.
+  var LINK_TAB = false;
+  var cap = null, player = null, ytErr = null, ytApi = null, ticker = null, tickWait = null;
+
+  function canScreen() {
+    if (hooks) return true;
+    return !!(navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === "function") && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+  }
+  function linkMsg(text) { var m = $("#linkMsg"); m.textContent = text || ""; m.hidden = !text; }
+  function setMode(m) {
+    state.mode = m === "link" ? "link" : "file";
+    $("#modeFile").setAttribute("aria-selected", state.mode === "file" ? "true" : "false");
+    $("#modeLink").setAttribute("aria-selected", state.mode === "link" ? "true" : "false");
+    $("#filePick").hidden = state.mode !== "file"; $("#linkBox").hidden = state.mode !== "link";
+    linkMsg(state.mode === "link" && !canScreen() ? "이 기능은 PC의 크롬이나 엣지에서만 쓸 수 있어요. 폰에서는 '영상 파일'로 해 주세요." : "");
+    $("#addLinks").disabled = !canScreen();
+    savePrefs();
+  }
+  if (!LINK_TAB) state.mode = "file";
+  if (!inClaude && LINK_TAB) {
+    $("#modes").hidden = false; $("#intHintLink").hidden = false;
+    $("#modeFile").addEventListener("click", function () { setMode("file"); });
+    $("#modeLink").addEventListener("click", function () { setMode("link"); });
+    $("#speed").value = String(state.speed);
+    $("#speed").addEventListener("change", function (e) { state.speed = Number(e.target.value); savePrefs(); });
+    $("#ytMode").value = state.ytMode;
+    var showYtMode = function () {
+      $("#speedRow").hidden = state.ytMode !== "play";
+      $("#ytModeHint").textContent = state.ytMode === "play"
+        ? "처음부터 끝까지 재생하며 지켜봐요. 영상 길이 ÷ 재생 속도만큼 걸리지만, 아주 잠깐 나온 화면까지 잡아요."
+        : "영상을 건너뛰며 화면을 확인하고, 화면이 바뀐 구간만 자세히 들여다봐요. 재생하는 것보다 몇 배 빠르지만, 몇 초 동안 다른 화면이 나왔다가 원래 화면으로 돌아온 경우는 놓칠 수 있어요.";
+    };
+    $("#ytMode").addEventListener("change", function (e) { state.ytMode = e.target.value; showYtMode(); savePrefs(); });
+    showYtMode();
+    setMode(state.mode);
+  }
+
+  function parseYouTubeId(s) {
+    s = s.trim(); if (!s) return null;
+    if (/^[\w-]{11}$/.test(s)) return s;
+    var u; try { u = new URL(/^https?:\/\//i.test(s) ? s : "https://" + s); } catch (e) { return null; }
+    var host = u.hostname.toLowerCase().replace(/^(www|m|music)\./, ""), id = null;
+    if (host === "youtu.be") id = u.pathname.split("/")[1];
+    else if (host === "youtube.com" || host === "youtube-nocookie.com") {
+      id = u.searchParams.get("v");
+      var m = u.pathname.match(/^\/(?:shorts|live|embed|v)\/([\w-]{11})/); if (!id && m) id = m[1];
+    }
+    return id && /^[\w-]{11}$/.test(id.slice(0, 11)) ? id.slice(0, 11) : null;
+  }
+  $("#addLinks").addEventListener("click", function () {
+    var lines = $("#links").value.split(/\n+/), bad = [], added = 0;
+    lines.forEach(function (line) {
+      if (!line.trim()) return;
+      var id = null;
+      line.trim().split(/\s+/).some(function (part) { id = parseYouTubeId(part); return !!id; });
+      if (!id) { bad.push(line.trim()); return; }
+      if (state.jobs.some(function (j) { return j.kind === "yt" && j.vid === id && j.status === "waiting"; })) return;
+      var job = { id: ++seq, kind: "yt", vid: id, file: null, label: "유튜브 영상 (" + id + ")", name: "youtube_" + id, status: "waiting", images: [], skipped: 0, missed: 0, merged: 0,
+        maskPct: 0, maskOff: false, phase: "", duration: 0, pos: 0, started: 0, finished: 0, msg: "", err: false, saving: false, saved: false, ui: null, thumbs: [] };
+      state.jobs.push(job); buildCard(job); renderJob(job); added++;
+    });
+    $("#links").value = bad.join("\n");
+    linkMsg(bad.length ? "유튜브 링크로 알아볼 수 없는 줄이 " + bad.length + "개 있어요. 남겨 둔 줄을 확인해 주세요." : (added ? "" : "추가할 링크가 없어요."));
+    refreshBar();
+  });
+
+  // a worker keeps a steady 4-per-second beat even when the browser slows down timers of a background window
+  function tick() {
+    return new Promise(function (res) {
+      if (ticker === null) {
+        try {
+          ticker = new Worker(URL.createObjectURL(new Blob(["setInterval(function(){postMessage(0)},100)"], { type: "text/javascript" })));
+          ticker.onmessage = function () { var f = tickWait; tickWait = null; if (f) f(); };
+        } catch (e) { ticker = false; }
+      }
+      if (ticker) tickWait = res; else setTimeout(res, 100);
+    });
+  }
+  async function ticks(n) { for (var i = 0; i < n; i++) await tick(); }
+  function sleep(ms) { return ticks(Math.max(1, Math.round(ms / 100))); }
+
+  function loadYT() {
+    if (window.YT && window.YT.Player) return Promise.resolve();
+    if (ytApi) return ytApi;
+    ytApi = new Promise(function (res, rej) {
+      var to = setTimeout(function () { ytApi = null; rej(new Error("timeout")); }, 20000);
+      var prev = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = function () { clearTimeout(to); if (typeof prev === "function") { try { prev(); } catch (e) {} } res(); };
+      var s = document.createElement("script"); s.src = "https://www.youtube.com/iframe_api"; s.async = true;
+      s.onerror = function () { clearTimeout(to); ytApi = null; rej(new Error("load")); };
+      document.head.appendChild(s);
+    });
+    return ytApi;
+  }
+  function makePlayer(id) {
+    return new Promise(function (res, rej) {
+      var vars = { autoplay: 1, controls: 0, disablekb: 1, fs: 0, iv_load_policy: 3, modestbranding: 1, rel: 0, playsinline: 1, mute: 1 };
+      if (/^https:/.test(location.protocol)) vars.origin = location.origin;
+      var opts = { videoId: id, width: "100%", height: "100%", playerVars: vars,
+        events: { onReady: function (e) { res(e.target); }, onError: function (e) { ytErr = e.data; } } };
+      setTimeout(function () { rej(new Error("timeout")); }, 30000);
+      try { if (hooks && hooks.makePlayer) hooks.makePlayer("ytHost", opts); else new window.YT.Player("ytHost", opts); } catch (e) { rej(e); }
+    });
+  }
+  function ytState() { try { return player.getPlayerState(); } catch (e) { return -9; } }
+  function ytErrText(code) {
+    if (code === 101 || code === 150 || code === 153) return "이 영상은 올린 사람이 다른 사이트에서 재생하지 못하게 막아 두었어요. 이 영상만 '영상 파일'로 처리해 주세요.";
+    if (code === 100) return "영상을 찾을 수 없어요. 삭제됐거나 비공개일 수 있어요.";
+    if (code === 2) return "링크의 영상 주소가 올바르지 않아요.";
+    if (code != null) return "유튜브에서 영상을 재생하지 못했어요. 잠시 뒤 다시 시도해 주세요.";
+    return "영상이 재생되지 않아요. 인터넷 연결을 확인하고 다시 시도해 주세요.";
+  }
+
+  async function startCapture() {
+    if (cap && cap.track.readyState === "live") return cap;
+    var stream = hooks && hooks.getStream ? await hooks.getStream() :
+      await navigator.mediaDevices.getDisplayMedia({
+        video: { displaySurface: "browser", frameRate: { ideal: 8, max: 15 }, width: { ideal: 3840 }, height: { ideal: 2160 }, cursor: "never" },
+        audio: false, preferCurrentTab: true, selfBrowserSurface: "include", surfaceSwitching: "exclude", monitorTypeSurfaces: "exclude"
+      });
+    var track = stream.getVideoTracks()[0];
+    var video = document.createElement("video"); video.muted = true; video.playsInline = true; video.srcObject = stream;
+    try { await video.play(); } catch (e) {}
+    cap = { stream: stream, track: track, video: video, cropped: false, external: !!(hooks && hooks.getStream), endedByUser: false };
+    track.addEventListener("ended", function () { if (cap && cap.track === track) cap.endedByUser = true; if (state.running) state.stopReq = true; });
+    return cap;
+  }
+  async function aimCapture() {
+    if (cap.external) return true;
+    var s = cap.track.getSettings ? cap.track.getSettings() : {};
+    if (s.displaySurface && s.displaySurface !== "browser") return false;
+    if (window.CropTarget && cap.track.cropTo) {
+      try { await cap.track.cropTo(await window.CropTarget.fromElement($("#stageVideo"))); cap.cropped = true; return true; }
+      catch (e) { return false; }
+    }
+    cap.cropped = false; return true; // older browsers: cut the player area out of the whole-tab picture
+  }
+  function srcRect() {
+    if (cap.cropped || cap.external) return null;
+    var r = $("#stageVideo").getBoundingClientRect(), sx = cap.video.videoWidth / window.innerWidth, sy = cap.video.videoHeight / window.innerHeight;
+    return [r.left * sx, r.top * sy, r.width * sx, r.height * sy];
+  }
+  function stageInfo(job, text) {
+    var box = $("#stageInfo"); box.textContent = "";
+    var n = state.jobs.filter(function (j) { return j.kind === "yt"; }), idx = n.indexOf(job) + 1;
+    box.append(el("b", null, idx + "/" + n.length), " " + job.label + " · " + text);
+  }
+  function closeStage() {
+    if (player) { try { player.stopVideo(); } catch (e) {} }
+    if (cap) { try { cap.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} cap.video.srcObject = null; cap = null; }
+    $("#stage").hidden = true;
+  }
+  $("#stageStop").addEventListener("click", function () { state.stopReq = true; $("#stageStop").disabled = true; $("#stageStop").textContent = "멈추는 중…"; });
+
+  function resetJob(job) {
+    job.status = "running"; job.images = []; job.skipped = 0; job.missed = 0; job.merged = 0; job.maskPct = 0; job.maskOff = false;
+    job.pos = 0; job.saved = false; job.phase = ""; job.err = false; job.started = Date.now(); job.finished = 0; job.msg = "";
+    job.thumbs.forEach(function (th) { URL.revokeObjectURL(th.url); }); job.thumbs = [];
+    job.ui.thumbs.textContent = ""; job.ui.track.querySelectorAll(".tick").forEach(function (t) { t.remove(); });
+  }
+  function ytFail(job, text) {
+    job.status = "failed"; job.msg = text; job.err = true; job.finished = Date.now();
+    renderJob(job); refreshBar();
+  }
+  function safeName(s) { return s.replace(/[\\/:*?"<>|\x00-\x1f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 80) || "youtube"; }
+  async function autoSave(job) {
+    if (!job.images.length) return;
+    await saveJob(job);
+    if (job.ui && job.ui.get && job.zipUrl) { try { job.ui.get.click(); } catch (e) {} }
+  }
+
+  async function processYouTube(job) {
+    resetJob(job); job.msg = "유튜브 영상을 여는 중…"; renderJob(job); refreshBar();
+    $("#stageStop").disabled = false; $("#stageStop").textContent = "멈추기";
+    $("#stage").hidden = false; stageInfo(job, "여는 중…");
+    ytErr = null;
+    try {
+      if (!player) { if (!(hooks && hooks.makePlayer)) await loadYT(); player = await makePlayer(job.vid); }
+      else player.loadVideoById(job.vid, 0);
+    } catch (e) { return ytFail(job, "유튜브 플레이어를 불러오지 못했어요. 인터넷 연결을 확인하고 다시 시작해 주세요."); }
+    try { player.mute(); player.playVideo(); } catch (e) {}
+    await sleep(500);
+    var waited = 0;
+    while (ytState() !== 1 && ytErr == null && waited < 160 && !state.stopReq) { await sleep(250); waited++; }
+    if (state.stopReq) { job.status = "stopped"; job.msg = cap && cap.endedByUser ? "화면 공유가 중지돼서 멈췄어요." : "중단했어요."; renderJob(job); return; }
+    if (ytErr != null || ytState() !== 1) return ytFail(job, ytErrText(ytErr));
+    try { player.setPlaybackRate(state.ytMode === "jump" ? 2 : state.speed); } catch (e) {}
+    try { var data = player.getVideoData() || {}; if (data.title) { job.label = data.title; job.name = safeName(data.title); } } catch (e) {}
+    job.duration = player.getDuration() || 0; renderJob(job);
+
+    if (!(await aimCapture())) {
+      state.stopReq = true;
+      return ytFail(job, "화면 공유에서 '이 탭'을 골라야 해요. '캡처 시작'을 다시 누르고 이 탭을 선택해 주세요.");
+    }
+    for (var w = 0; w < 40 && !(cap.video.videoWidth > 0); w++) await sleep(250);
+    var sr = srcRect(), fw = sr ? sr[2] : cap.video.videoWidth, fh = sr ? sr[3] : cap.video.videoHeight;
+    if (!fw || !fh) return ytFail(job, "화면을 받아오지 못했어요. 다시 시작해 주세요.");
+    var G = makeGeom(fw, fh);
+    var small = document.createElement("canvas"); small.width = G.w; small.height = G.h;
+    var sctx = small.getContext("2d", { willReadFrequently: true }); sctx.imageSmoothingQuality = "medium";
+    var scale = state.maxW && fw > state.maxW ? state.maxW / fw : 1;
+    var full = document.createElement("canvas"); full.width = Math.round(fw * scale); full.height = Math.round(fh * scale);
+    var fctx = full.getContext("2d");
+    var skipDup = state.skipDup, minPx = state.minPx, q = state.quality, useMask = skipDup && state.ignoreMoving, doMerge = skipDup && state.merge;
+    var ema = new Float32Array(G.nb), mask = new Uint8Array(G.nb), kept = [], pctx = { ptr: null };
+    var prevSig = null, pending = null, lastT = -1, nextRaw = 0, lastPaint = 0, paused = 0;
+
+    // while YouTube's title overlay fades away, already learn which parts keep moving (presenter camera)
+    stageInfo(job, "화면 맞추는 중…");
+    for (var warm = 0; warm < 16 && !state.stopReq; warm++) {
+      await sleep(250);
+      var ws = readSig(sctx, G, cap.video, srcRect());
+      if (useMask && prevSig) {
+        var wc = blockChanges(prevSig, ws, G);
+        if (wc.frac < 0.3) for (var wb = 0; wb < G.nb; wb++) ema[wb] = ema[wb] * 0.85 + (wc.cnt[wb] >= 32 ? 0.15 : 0);
+      }
+      if (prevSig) isPointerOnly(analyze(prevSig, ws, G, mask), pctx);
+      prevSig = ws;
+    }
+    if (useMask) mask = buildMask(ema, G, job, null);
+    // then start again from the beginning
+    try { player.seekTo(0, true); player.playVideo(); } catch (e) {}
+    await sleep(1000);
+
+    // ---- fast mode: jump through the video instead of playing it ----
+    var dur = 0, fine = state.interval, coarse = Math.max(12, fine * 2), jumpStarted = Date.now(), looks = 0;
+    function streamFrames(n, ms) {
+      return new Promise(function (res) {
+        var c = 0, done = false, v = cap.video, to = setTimeout(fin, ms);
+        function fin() { if (done) return; done = true; clearTimeout(to); res(c); }
+        function cb() { if (done) return; if (++c >= n) fin(); else v.requestVideoFrameCallback(cb); }
+        if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(cb); else { clearTimeout(to); setTimeout(fin, Math.min(ms, 250)); }
+      });
+    }
+    async function snapBitmap() {
+      var r = srcRect();
+      try { return r ? await createImageBitmap(cap.video, r[0], r[1], r[2], r[3]) : await createImageBitmap(cap.video); } catch (e) { return null; }
+    }
+    function drop(look) { if (look && look.bmp) { try { look.bmp.close(); } catch (e) {} look.bmp = null; } }
+    // jump to time t, wait until YouTube shows that spot and the picture holds still
+    async function lookAt(t) {
+      t = Math.max(0, Math.min(t, dur - 1));
+      try { player.seekTo(t, true); } catch (e) {}
+      var arrived = false;
+      for (var i = 0; i < 100 && !state.stopReq && ytErr == null; i++) {
+        await tick();
+        var st = ytState(), ct = -1; try { ct = player.getCurrentTime(); } catch (e) {}
+        if (st === 2 || st === 5) { try { player.playVideo(); } catch (e) {} }
+        if (st === 1 && Math.abs(ct - t) < 0.75) { arrived = true; break; }
+      }
+      if (!arrived) return null;
+      await streamFrames(2, 350);
+      var sig = readSig(sctx, G, cap.video, srcRect());
+      for (var k = 0; k < 6 && !state.stopReq; k++) {
+        await streamFrames(1, 150);
+        var s2 = readSig(sctx, G, cap.video, srcRect());
+        var same = !isNewScene(analyze(sig, s2, G, mask), minPx, pctx);
+        sig = s2;
+        if (same) break;
+      }
+      var at = t; try { at = player.getCurrentTime(); } catch (e) {}
+      return { sig: sig, t: at, bmp: await snapBitmap() };
+    }
+    // now and then let the video run for half a second to keep learning what keeps moving
+    async function probe() {
+      var a = readSig(sctx, G, cap.video, srcRect());
+      try { player.setPlaybackRate(2); } catch (e) {}
+      await sleep(500);
+      var b = readSig(sctx, G, cap.video, srcRect());
+      try { player.setPlaybackRate(0.25); } catch (e) {}
+      if (!useMask) return;
+      var ch = blockChanges(a, b, G);
+      if (ch.frac < 0.3) { for (var i = 0; i < G.nb; i++) ema[i] = ema[i] * 0.75 + (ch.cnt[i] >= 32 ? 0.25 : 0); mask = buildMask(ema, G, job, mask); }
+    }
+    async function consider(look) {
+      var last = kept.length ? kept[kept.length - 1] : null;
+      if (last && !isNewScene(analyze(last.sig, look.sig, G, mask), minPx, pctx)) { job.skipped++; drop(look); return; }
+      var cur = look;
+      for (var k = 0; k < 2 && !state.stopReq; k++) {   // caught in the middle of a fade? look a moment later
+        var nx = await lookAt(cur.t + 0.7); if (!nx) break;
+        if (!isNewScene(analyze(cur.sig, nx.sig, G, mask), minPx, pctx)) { drop(nx); break; }
+        drop(cur); cur = nx;
+      }
+      var dup = false;
+      for (var h = kept.length - 1; h >= 0 && h >= kept.length - 12; h--) {
+        if (!isNewScene(analyze(kept[h].sig, cur.sig, G, mask), minPx, pctx)) { dup = true; break; }
+      }
+      if (dup || cur.sig.blank || !cur.bmp) { job.skipped++; drop(cur); drop(look); return; }
+      fctx.drawImage(cur.bmp, 0, 0, full.width, full.height);
+      var blob = await toBlob(full, q);
+      drop(cur); drop(look);
+      if (!blob) return;
+      if (doMerge && last && isAdditive(analyze(last.sig, cur.sig, G, mask), pctx)) {
+        job.images[last.idx].blob = blob; last.sig = cur.sig; replaceThumb(job, last.idx, blob); job.merged++;
+      } else {
+        job.images.push({ name: String(job.images.length + 1).padStart(4, "0") + "_" + fmt(look.t) + ".jpg", blob: blob, t: look.t });
+        kept.push({ sig: cur.sig, idx: job.images.length - 1 }); if (kept.length > 12) kept.shift();
+        addTick(job, look.t); addThumb(job, blob, look.t, job.images.length - 1);
+      }
+    }
+    // the two ends differ: look in the middle, and keep halving until the gap is no wider than the chosen interval
+    async function refine(a, sa, b, sb) {
+      if (state.stopReq || ytErr != null || b - a <= fine + 0.01) return;
+      if (!isNewScene(analyze(sa, sb, G, mask), minPx, pctx)) return;
+      var lk = await lookAt((a + b) / 2); if (!lk) { job.missed++; return; }
+      var mt = lk.t, ms = lk.sig;
+      await refine(a, sa, mt, ms);
+      await consider(lk);
+      await refine(mt, ms, b, sb);
+    }
+    function showProgress(t) {
+      job.pos = t;
+      var pct = dur ? t / dur : 0, spent = (Date.now() - jumpStarted) / 1000;
+      stageInfo(job, Math.floor(pct * 100) + "% · 사진 " + job.images.length + "장 · 남은 시간 " + (pct > 0.02 ? mins(spent / pct * (1 - pct)) : "계산 중"));
+      renderJob(job); refreshBar();
+    }
+    async function jumpThrough() {
+      try { dur = job.duration || player.getDuration() || 0; } catch (e) {}
+      if (!dur) return;
+      jumpStarted = Date.now();
+      try { player.setPlaybackRate(0.25); player.playVideo(); } catch (e) {}
+      if (!skipDup) {
+        for (var t = 0; t < dur && !state.stopReq && ytErr == null; t += fine) {
+          var lk = await lookAt(t); if (!lk) { job.missed++; continue; }
+          if (lk.bmp) {
+            fctx.drawImage(lk.bmp, 0, 0, full.width, full.height);
+            var rb = await toBlob(full, q);
+            if (rb) { job.images.push({ name: String(job.images.length + 1).padStart(4, "0") + "_" + fmt(lk.t) + ".jpg", blob: rb, t: lk.t }); addTick(job, lk.t); addThumb(job, rb, lk.t, job.images.length - 1); }
+          }
+          drop(lk); showProgress(t);
+        }
+        if (!state.stopReq) job.pos = dur;
+        return;
+      }
+      var first = await lookAt(0.3);
+      if (!first) { job.missed++; return; }
+      var tPrev = first.t, sPrev = first.sig;
+      await consider(first);
+      for (var tc = coarse; !state.stopReq && ytErr == null; tc += coarse) {
+        var tt = Math.min(tc, dur - 1);
+        var lk2 = await lookAt(tt);
+        if (++looks % 25 === 0) await probe();
+        if (!lk2) { job.missed++; if (tt >= dur - 1) break; continue; }
+        var bt = lk2.t, bs = lk2.sig;
+        await refine(tPrev, sPrev, bt, bs);
+        await consider(lk2);
+        tPrev = bt; sPrev = bs;
+        showProgress(bt);
+        if (tt >= dur - 1) { if (!state.stopReq) job.pos = dur; break; }
+      }
+    }
+
+    if (state.ytMode === "jump" && !state.stopReq) await jumpThrough();
+    else while (true) {
+      await sleep(250);
+      if (state.stopReq || ytErr != null) break;
+      var st = ytState();
+      if (st === 0) break;                                   // ended
+      if (st === 2) { if (++paused > 8) { try { player.playVideo(); } catch (e) {} paused = 0; } continue; }
+      if (st !== 1) continue;                                // buffering
+      var t = 0; try { t = player.getCurrentTime(); } catch (e) {}
+      if (t <= lastT + 0.01) continue;
+      lastT = t; job.pos = t;
+      if (!job.duration) { try { job.duration = player.getDuration() || 0; } catch (e) {} }
+      sr = srcRect();
+      var sig = readSig(sctx, G, cap.video, sr);
+
+      if (useMask && prevSig) {
+        var ch = blockChanges(prevSig, sig, G);
+        if (ch.frac < 0.3) {
+          for (var b = 0; b < G.nb; b++) ema[b] = ema[b] * 0.93 + (ch.cnt[b] >= 32 ? 0.07 : 0);
+          mask = buildMask(ema, G, job, mask);
+        }
+      }
+      prevSig = sig;
+
+      var now = Date.now();
+      if (now - lastPaint > 1000) {
+        lastPaint = now; renderJob(job); refreshBar();
+        stageInfo(job, (job.duration ? Math.floor(t / job.duration * 100) + "%" : clock(t)) + " · 사진 " + job.images.length + "장");
+      }
+
+      if (!skipDup) {
+        if (t >= nextRaw) {
+          nextRaw = t + state.interval;
+          if (sr) fctx.drawImage(cap.video, sr[0], sr[1], sr[2], sr[3], 0, 0, full.width, full.height); else fctx.drawImage(cap.video, 0, 0, full.width, full.height);
+          var rb = await toBlob(full, q);
+          if (rb) { job.images.push({ name: String(job.images.length + 1).padStart(4, "0") + "_" + fmt(t) + ".jpg", blob: rb, t: t }); addTick(job, t); addThumb(job, rb, t, job.images.length - 1); }
+        }
+        continue;
+      }
+
+      var last = kept.length ? kept[kept.length - 1] : null;
+      if (last && !isNewScene(analyze(last.sig, sig, G, mask), minPx, pctx)) { pending = null; continue; }
+      // a change: wait until two looks in a row agree (the screen has stopped moving), at most 4 seconds
+      if (!pending) { pending = { sig: sig, t: t, wall: now }; continue; }
+      if (isNewScene(analyze(pending.sig, sig, G, mask), minPx, pctx) && now - pending.wall < 4000) { pending.sig = sig; continue; }
+      var t0 = pending.t; pending = null;
+
+      var dup = false;
+      for (var h = kept.length - 1; h >= 0 && h >= kept.length - 12; h--) {
+        if (!isNewScene(analyze(kept[h].sig, sig, G, mask), minPx, pctx)) { dup = true; break; }
+      }
+      if (dup || sig.blank) { job.skipped++; continue; }
+      // the picture is taken from the same frame the comparison just used
+      if (sr) fctx.drawImage(cap.video, sr[0], sr[1], sr[2], sr[3], 0, 0, full.width, full.height); else fctx.drawImage(cap.video, 0, 0, full.width, full.height);
+      var blob = await toBlob(full, q);
+      if (!blob) continue;
+      if (doMerge && last && isAdditive(analyze(last.sig, sig, G, mask), pctx)) {
+        job.images[last.idx].blob = blob; last.sig = sig; replaceThumb(job, last.idx, blob); job.merged++;
+      } else {
+        job.images.push({ name: String(job.images.length + 1).padStart(4, "0") + "_" + fmt(t0) + ".jpg", blob: blob, t: t0 });
+        kept.push({ sig: sig, idx: job.images.length - 1 }); if (kept.length > 12) kept.shift();
+        addTick(job, t0); addThumb(job, blob, t0, job.images.length - 1);
+      }
+    }
+
+    job.finished = Date.now();
+    var reachedEnd = ytState() === 0 || (job.duration > 0 && job.pos >= job.duration - 1.5);
+    if (ytErr != null) { job.status = "failed"; job.err = true; job.msg = ytErrText(ytErr); }
+    else if (reachedEnd) { job.status = "done"; job.pos = job.duration; job.msg = ""; }
+    else if (state.stopReq) { job.status = "stopped"; job.msg = cap && cap.endedByUser ? "화면 공유가 중지돼서 멈췄어요. 지금까지 찍은 사진은 저장할 수 있어요." : "중단했어요. 지금까지 찍은 사진은 저장할 수 있어요. 다시 시작하면 이 영상은 처음부터 다시 합니다."; }
+    else { job.status = "done"; job.pos = job.duration; job.msg = ""; }
+    renderJob(job); refreshBar();
+    if (job.status === "done") await autoSave(job);
   }
 
   // ---------- save ----------
@@ -574,9 +1689,36 @@ details.panel[open] summary::after { content: " －"; }
   }
   goBtn.addEventListener("click", function () {
     if (state.running) { state.stopReq = true; refreshBar(); return; }
-    runAll();
+    var needScreen = state.jobs.some(function (j) { return j.kind === "yt" && (j.status === "waiting" || j.status === "stopped"); });
+    if (!needScreen) { runAll(); return; }
+    // the screen-sharing question must be asked right inside this tap
+    startCapture().then(function () { runAll(); }, function () {
+      setMode("link");
+      linkMsg("화면 공유를 허락해야 유튜브 캡처를 시작할 수 있어요. '캡처 시작'을 다시 누르고, '이 탭'을 고른 뒤 공유를 눌러 주세요.");
+    });
   });
   refreshBar();
+
+  // (inside the extension's work window this page is only an empty stage: nothing to show there)
+  if (!/[?&]lc-stage=1/.test(location.search)) {
+    $("#resumeClear").addEventListener("click", function () {
+      if (state.running) return;
+      Promise.all([dbDelAll("meta:"), dbDelAll("piece:")]).then(function () {
+        state.jobs.forEach(function (j) { if (j.kind === "file" && j.status !== "done") { j.recs = null; j.hasSaved = false; if (j.status === "waiting") j.msg = ""; renderJob(j); } });
+        showUnfinished();
+      });
+    });
+    showUnfinished();
+    // with the extension or the userscript installed, its own panel on this page takes the YouTube links: point to it
+    if (!inClaude) {
+      var seenExt = 0, extTimer = setInterval(function () {
+        if (window.__lectureCaptureLoaded) {
+          clearInterval(extTimer);
+          $("#ytPanelHint").hidden = false;
+        } else if (++seenExt > 20) clearInterval(extTimer);
+      }, 500);
+    }
+  }
 })();
 </script>
 

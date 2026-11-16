@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.13.2
+// @version      1.14.0
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -393,8 +393,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (last && !isNewScene(analyzeX(last.sig, sig, G, mask, pctx), minPx, pctx)) { C.pending = null; return; }
       // a new screen counts once it holds still for two looks in a row (the second look comes 0.25 s after the first);
       // while it keeps changing (scrolling, an animation) it is followed, and photographed after 5 s at the latest
-      if (!C.pending) { C.pending = { sig: sig, t: t }; return; }
-      if (isNewScene(analyzeX(C.pending.sig, sig, G, mask, pctx), minPx, pctx) && t - C.pending.t < settle) { C.pending.sig = sig; return; }
+      if (!C.pending) { C.pending = { sig: sig, t: t, n: 0 }; return; }
+      if (isNewScene(analyzeX(C.pending.sig, sig, G, mask, pctx), minPx, pctx) && t - C.pending.t < settle) { C.pending.sig = sig; C.pending.n++; return; }
       var t0 = t - C.pending.t > 1.5 ? t : C.pending.t; C.pending = null;
       commit(sig, t0, null, t);
     };
@@ -556,7 +556,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     try { v.pause(); } catch (e) {}
     function goTo(t) { return showMoment(v, A, t); }
     return (async function () {
-      var t = start, fails = 0;
+      var t = start, fails = 0, grid = start;
       C.prevSig = null;
       while (!stopReq && !C.bad) {
         if (t >= P.end - 0.05 || (v.duration && t > v.duration - 0.3)) break;
@@ -571,7 +571,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         P.mt = Math.max(P.mt, t); P.pos = Math.max(P.pos, Math.min(t, P.end)); P.diag = "";
         P.rate = (P.pos - start) / Math.max(0.5, (Date.now() - began) / 1000);
         if (t >= burstAt) { burst = 4; burstAt = t + 40; }
-        if (burst > 0) { burst--; t += 0.25; } else t += C.pending ? 0.5 : every;
+        // The regular looks stay on their beat (start, +every, +2 every, ...). A look that found something new gets a second
+        // look a quarter second later (then every half second while the screen keeps moving): those are extra and do not
+        // push the beat back, so no stretch of video longer than the chosen interval goes unseen.
+        if (burst > 0) { burst--; t += 0.25; }
+        else if (C.pending) t += C.pending.n ? 0.5 : 0.25;
+        else { while (grid <= t + 0.01) grid += every; t = grid; }
       }
     })();
   }
