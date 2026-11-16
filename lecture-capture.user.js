@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.13.1
+// @version      1.13.2
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -222,7 +222,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (b && b.offsetParent !== null) { try { b.click(); } catch (e) {} }
   }
   // "det": a player that only looks for changes. The comparison shrinks every picture to 480 dots wide anyway, so
-  // 360p (640 wide) shows it the same thing as 1080p at a ninth of the decoding work and a fraction of the data. The photos are taken afterwards,
+  // 480p shows it the same thing as 1080p at a fifth of the decoding work and memory. The photos are taken afterwards,
   // by another player, in the quality that was chosen.
   function setQuality(mp, mode) {
     try {
@@ -230,7 +230,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       // the chosen quality, or the best one below it that this video has ("max": the best it has)
       var order = ["highres", "hd2880", "hd2160", "hd1440", "hd1080", "hd720", "large", "medium", "small"];
       var q = mode && mode !== "det" ? mode : prefs.quality;
-      var from = mode === "det" ? order.indexOf("medium") : q === "max" ? 0 : Math.max(0, order.indexOf(q));
+      var from = mode === "det" ? order.indexOf("large") : q === "max" ? 0 : Math.max(0, order.indexOf(q));
       var best = order.slice(from).filter(function (q) { return lv.indexOf(q) >= 0; })[0];
       if (!best && mode === "det") best = lv.filter(function (q) { return order.indexOf(q) >= 0; }).pop();   // nothing that low: the lowest there is
       if (best && a.setPlaybackQualityRange) a.setPlaybackQualityRange(best, best);
@@ -785,6 +785,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (!job) return;
     function send(msg) { try { window.parent.postMessage(Object.assign({ lc: 1, job: job, slot: slot }, msg), parentOrigin); } catch (e) {} }
     var ready = null, busy = false, runs = 0, C = null, cur = null, mode = qs.get("lcq") || "", carry = null;
+    // the video's length in seconds, or 0 while the player does not know it
+    function lengthOf(v, mp) {
+      var d = v ? v.duration : NaN;
+      if (!(isFinite(d) && d > 0)) { try { d = api(mp).getDuration ? Number(api(mp).getDuration()) : NaN; } catch (e) { d = NaN; } }
+      return isFinite(d) && d > 0 ? d : 0;
+    }
+    // the player's video element as it is now (YouTube may have swapped it since)
+    function nowVideo() { var v = document.querySelector("#movie_player video, video"); if (v && ready && v !== ready.video) { ready.video = v; C = null; runs = 0; carry = null; } return ready.video; }
     send({ type: "hello" });
 
     // wait until the player shows the video (or refuses), skipping a pre-roll ad if there is one
@@ -796,14 +804,24 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (err) { send({ type: "error", msg: err }); return; }
         var mp = document.getElementById("movie_player"), v = document.querySelector("#movie_player video, video");
         if (mp && isAd(mp)) { limit = Math.max(limit, Date.now() - t0 + 30000); trySkipAd(document); continue; }
-        if (mp && v && v.readyState >= 1 && isFinite(v.duration) && v.duration > 0) {
+        if (mp && v && v.readyState >= 1 && lengthOf(v, mp)) {
+          var dur0 = lengthOf(v, mp);
           v.muted = true; try { if (api(mp).mute) api(mp).mute(); } catch (e) {}
           setQuality(mp, mode);
           var title = ""; try { title = (api(mp).getVideoData && api(mp).getVideoData().title) || ""; } catch (e) {}
           if (!title) title = (document.title || "").replace(/\s*-\s*YouTube\s*$/i, "").trim();
-          for (var i = 0; i < 40 && !v.videoWidth; i++) { if (v.paused) { try { v.play().catch(function () {}); } catch (e) {} } await sleep(250); }
+          // Changing the quality can make the player load the video afresh: for a moment it has no picture and does not
+          // know its own length (and may even use a new video element). Wait until both are back and stay for half a second.
+          var okSince = -1;
+          for (var i = 0; i < 60; i++) {
+            await sleep(250);
+            v = document.querySelector("#movie_player video, video") || v;
+            if (v.paused) { try { v.play().catch(function () {}); } catch (e) {} }
+            if (v.videoWidth && lengthOf(v, mp)) { if (okSince < 0) okSince = i; if (i - okSince >= 2) break; } else okSince = -1;
+          }
+          v.muted = true;
           ready = { mp: mp, video: v };
-          send({ type: "ready", dur: v.duration, title: title, w: v.videoWidth || 1280, h: v.videoHeight || 720 });
+          send({ type: "ready", dur: lengthOf(v, mp) || dur0, title: title, w: v.videoWidth || 1280, h: v.videoHeight || 720 });
           return;
         }
         if (v && v.paused) { try { var pp = v.play(); if (pp && pp.catch) pp.catch(function () {}); } catch (e) {} }
@@ -819,7 +837,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (e.data.type !== "run" || busy || !ready) return;
       busy = true; stopReq = false;
       Object.assign(prefs, e.data.prefs || {});
-      var v = ready.video, mp = ready.mp, seq = e.data.seq;
+      var v = nowVideo(), mp = ready.mp, seq = e.data.seq;
       if (!C) { var G = makeGeom(e.data.w, e.data.h), full = document.createElement("canvas"); C = makeCapturer(G, v, full, full.getContext("2d")); C.noSnap = mode === "det"; }
       else { C.scenes = []; C.kept = []; C.pending = null; C.prevSig = null; }   // keep what was learned (moving parts, pointer)
       var P = { video: v, mp: mp, doc: document, warm: runs === 0, cont: !!e.data.cont, carry: carry };
@@ -841,7 +859,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     async function takeShots(d) {
       busy = true; stopReq = false;
       Object.assign(prefs, d.prefs || {});
-      var v = ready.video, mp = ready.mp, A = api(mp), seq = d.seq, state = "", beat = 0;
+      var v = nowVideo(), mp = ready.mp, A = api(mp), seq = d.seq, state = "", beat = 0;
       var tick = setInterval(function () { send({ type: "progress", seq: seq, shots: true, diag: state, beat: ++beat, err: state === "로딩" ? (playerError(document) || "") : "" }); }, 1000);
       try { if (A.pauseVideo) A.pauseVideo(); } catch (e) {}
       try { v.pause(); } catch (e) {}
@@ -1271,7 +1289,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         }
         return "stuck";
       }
-      var r0 = players[0].ready; dur = r0.dur; title = r0.title || id; w = r0.w; hgt = r0.h; res.title = title;
+      var r0 = players[0].ready; title = r0.title || id; w = r0.w; hgt = r0.h; res.title = title;
+      dur = 0; players.forEach(function (P) { var d = Number(P.ready && P.ready.dur); if (isFinite(d) && d > dur) dur = d; });
+      if (!(dur > 0)) {
+        // no player could tell how long the video is: nothing can be planned. Try once more, then leave it for later.
+        players.forEach(function (P) { dismiss(P); }); closeStage();
+        if (!opt.again) { ui.status(label, "영상 길이를 읽지 못해 다시 열어요…"); await bsleep(2000); return runParts(id, label, res, { again: true }); }
+        res.status = "wait"; res.msg = "영상 길이를 읽지 못했어요(실시간 방송이거나, 유튜브가 영상을 보내 주지 않아요)"; return "paused";
+      }
       // pieces of 30 s to 2.5 min; the last ones get split further when players run out of work
       // (pieces of at most a minute of video: a finished piece is safe on the device, so little is lost if the page goes away)
       var pieceLen = Math.max(30, Math.min(60, dur / (Math.max(cap, players.length) * 2)));
@@ -1470,6 +1495,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       if (!scenes.length) {
         var sS = 0, sB = 0; players.forEach(function (P) { sS += P.samples || 0; sB += P.blanks || 0; });
+        outs.forEach(function (o) { sS += o.d.samples || 0; sB += o.d.blanks || 0; });
+        if (!sS && !stopReq) {
+          // not one look was taken: the video did not really run. Try once more, then leave it for later.
+          if (!opt.again) { ui.status(label, "화면을 한 번도 읽지 못해 다시 해요…"); await dbDelAll("seg:" + id + ":"); await bsleep(2000); return runParts(id, label, res, { again: true }); }
+          res.status = "wait"; res.msg = "영상을 읽지 못했어요(화면 확인 0번)"; return "paused";
+        }
         res.status = "bad"; res.msg = "찍힌 장면이 없어요 (화면 확인 " + sS + "번 중 빈 화면 " + sB + "번)"; return "fail";
       }
       if (two) {
