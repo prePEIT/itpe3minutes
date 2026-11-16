@@ -46,7 +46,11 @@ const CH=[
  {k:'zipup',h:'@zipup_kpc',short:'ZIP-UP',pid:'UUmEHgsTnqvBBGqtmFDorvxg',data:[]},
  {k:'jlabs',h:'@LeeJ130',short:'JLabs 이제이',pid:'UUz-S6uk_Xr3OwmMbW77HGDw',data:[]},
  {k:'kpc',h:'@kpc6990',short:'KPC 기술사회',pid:'UUUCD0JAHf_MFRSYatiRbATw',data:[]},
- {k:'itpens',h:'@ITPENS심화반',short:'ITPE NS심화반',pid:'UUvIis6OXbrup_2KqhQXaiaA',data:[]}
+ {k:'itpens',h:'@ITPENS심화반',short:'ITPE NS심화반',pid:'UUvIis6OXbrup_2KqhQXaiaA',data:[]},
+ {k:'techbridge',h:'@TechBridge-KR',short:'Tech Bridge',pid:'UU895rbZX2iXLTDfji7W4PfA',data:[]},
+ {k:'bisang',h:'@bisanglab',short:'비상TV',pid:'UU3m8RM6VKSeGXWHIXCuQt2A',data:[]},
+ {k:'ibm',h:'@IBMTechnology',short:'IBM Technology',pid:'UUKWaEZ-_VweaEx1j62do_vQ',data:[]},
+ {k:'bigup',h:'@BigUpIT기술사Study',short:'Big&Up 기술사',pid:'UU8I47ymUD5rahXuZmZ0NxuQ',data:[]}
 ];
 const LS={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}},del:k=>{try{localStorage.removeItem(k)}catch(e){}}};
 // 저장된 목록 불러오기 (예전 버전 저장분도 이어받음)
@@ -59,6 +63,7 @@ function cat(t,k){
  if(k==='itpe'){const m=t.match(/^\[([^\]]+)\]/);if(!m)return'기타';const c=m[1];
   if(/^720제\//.test(c))return'720제·'+c.split('/')[1];if(/^\d+회/.test(c))return c.match(/^\d+회/)[0]+' 기출';if(/^TOP반/.test(c))return c.includes('명답')?'TOP반 명답특강':'TOP반 강의';return c}
  if(k==='zipup'){const m=t.match(/^([A-Z]{2,5})-\d+/);if(m)return m[1]+' 계열강의';if(/\[계열 강의\]/.test(t))return'계열강의';if(/\d+회/.test(t)&&/기출/.test(t))return'기출';if(/정리|핵심/.test(t))return'개념 정리';return'기타'}
+ if(k==='ibm'){if(/quantum/i.test(t))return'Quantum';if(/secur|cyber|hack|phish|zero trust|identity|ransom/i.test(t))return'Security';if(/\bAI\b|LLM|agent|RAG|model|GPT|machine learning|neural|prompt|MCP/i.test(t))return'AI';if(/cloud|kubernetes|container|hybrid|devops|serverless/i.test(t))return'Cloud';if(/data|database|SQL|lakehouse|analytics/i.test(t))return'Data';if(/network|5G|edge/i.test(t))return'Network';return'기타'}
  const b=(t.match(/^\[([^\]]+)\]/)||[])[1]||'';
  if(k==='kpc'&&b){const m=b.match(/^(\d+회)\s*(합숙|모의고사|기출|특강|설명회)?/);if(m)return m[1]+(m[2]?' '+m[2]:'');return b}
  if(/주간\s*모의고사|주모/.test(t))return'주간모의고사';if(/연합\s*모의고사|모의고사/.test(t))return'모의고사';if(/핵심\s*토픽/.test(t))return'핵심토픽';
@@ -117,7 +122,7 @@ async function sync(){const key=LS.get('yt_key');if(!key){st('API 키가 없어�
  st('새 영상 확인 중…');const msg=[];let err='';
  for(const c of CH){try{msg.push(await syncCh(c,key))}catch(e){err+=`${c.short} 확인 실패: ${e.message.replace(/<[^>]+>/g,'')} `}}
  const hasNew=items().some(v=>v.n);if(hasNew&&cur==='전체')cur='NEW';drawChs();drawChips();render();
- st(err?err+'(키·인터넷 상태를 확인해 주세요)':`마지막 확인 ${kst(new Date().toISOString())} · ${msg.join(' · ')}`,err?'err':(/새 영상 [1-9]|불러옴/.test(msg.join())?'ok':''))}
+ st(err?err+'(키·인터넷 상태를 확인해 주세요)':`마지막 확인 ${kst(new Date().toISOString())} · `+(msg.filter(m=>!/새 영상 0개$/.test(m)).join(' · ')||'새 영상 없음'),err?'err':(/새 영상 [1-9]|불러옴/.test(msg.join())?'ok':''))}
 document.getElementById('sync').onclick=sync;
 document.getElementById('keybtn').onclick=()=>{const b=document.getElementById('keybox');b.hidden=!b.hidden;document.getElementById('key').value=LS.get('yt_key')||''};
 document.getElementById('keysave').onclick=()=>{const k=document.getElementById('key').value.trim();if(!k)return;LS.set('yt_key',k);document.getElementById('keybox').hidden=true;sync()};
