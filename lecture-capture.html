@@ -83,7 +83,9 @@ header p { margin: 4px 0 0; color: var(--muted); }
 .row { display: flex; flex-direction: column; gap: 8px; }
 .row > label, .row > .lbl { font-weight: 600; font-size: 0.95rem; }
 .hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chips { display: flex; flex-direction: column; gap: 12px; }
+.chipgrp { display: flex; flex-wrap: wrap; gap: 8px; }
+.chiplbl { flex-basis: 100%; font-size: 13px; color: var(--muted, #5b6472); }
 .chip {
   font: inherit; font-family: var(--font-mono); font-size: 0.92rem;
   border: 1px solid var(--line); background: var(--surface); color: var(--ink);
@@ -244,18 +246,31 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     <div class="row" id="intervalRow">
       <span class="lbl" id="lbl-int">몇 초마다 확인할까요?</span>
       <div class="chips" id="intervals" role="group" aria-labelledby="lbl-int">
-        <button type="button" class="chip" data-v="1">1초</button>
-        <button type="button" class="chip" data-v="2">2초</button>
-        <button type="button" class="chip" data-v="3">3초</button>
-        <button type="button" class="chip" data-v="4">4초</button>
-        <button type="button" class="chip" data-v="5" aria-pressed="true">5초</button>
-        <button type="button" class="chip" data-v="6">6초</button>
-        <button type="button" class="chip" data-v="7">7초</button>
-        <button type="button" class="chip" data-v="8">8초</button>
-        <button type="button" class="chip" data-v="9">9초</button>
-        <button type="button" class="chip" data-v="10">10초</button>
+        <div class="chipgrp"><span class="chiplbl">1초보다 짧게 (아주 꼼꼼, 오래 걸림)</span>
+          <button type="button" class="chip" data-v="0.1">0.1초</button>
+          <button type="button" class="chip" data-v="0.2">0.2초</button>
+          <button type="button" class="chip" data-v="0.3">0.3초</button>
+          <button type="button" class="chip" data-v="0.4">0.4초</button>
+          <button type="button" class="chip" data-v="0.5">0.5초</button>
+          <button type="button" class="chip" data-v="0.6">0.6초</button>
+          <button type="button" class="chip" data-v="0.7">0.7초</button>
+          <button type="button" class="chip" data-v="0.8">0.8초</button>
+          <button type="button" class="chip" data-v="0.9">0.9초</button>
+        </div>
+        <div class="chipgrp"><span class="chiplbl">1~10초</span>
+          <button type="button" class="chip" data-v="1">1초</button>
+          <button type="button" class="chip" data-v="2">2초</button>
+          <button type="button" class="chip" data-v="3">3초</button>
+          <button type="button" class="chip" data-v="4">4초</button>
+          <button type="button" class="chip" data-v="5" aria-pressed="true">5초</button>
+          <button type="button" class="chip" data-v="6">6초</button>
+          <button type="button" class="chip" data-v="7">7초</button>
+          <button type="button" class="chip" data-v="8">8초</button>
+          <button type="button" class="chip" data-v="9">9초</button>
+          <button type="button" class="chip" data-v="10">10초</button>
+        </div>
       </div>
-      <p class="hint">간격이 짧을수록 잠깐 지나간 화면까지 잡지만 시간이 오래 걸려요. 사진 수는 간격과 거의 상관없어요. 1~2초는 3시간 반 영상 기준 폰에서 1시간 가까이 걸릴 수 있어요.<span id="intHintLink" hidden> 유튜브 링크의 '빠르게'는 화면이 바뀐 구간을 이 간격까지 좁혀 들여다보고, '꼼꼼하게'는 간격과 상관없이 계속 지켜봐요.</span></p>
+      <p class="hint">간격이 짧을수록 잠깐 지나간 화면까지 잡지만 시간이 오래 걸려요. 사진 수는 간격과 거의 상관없어요. 1~2초는 3시간 반 영상 기준 폰에서 1시간 가까이 걸릴 수 있어요. 1초보다 짧게 고르면 영상을 빨리 재생하면서 보는데, 폰에서는 영상 길이만큼 걸릴 수도 있어요.<span id="intHintLink" hidden> 유튜브 링크의 '빠르게'는 화면이 바뀐 구간을 이 간격까지 좁혀 들여다보고, '꼼꼼하게'는 간격과 상관없이 계속 지켜봐요.</span></p>
     </div>
     <label class="switch" for="dup">
       <input type="checkbox" id="dup" checked>
@@ -263,7 +278,11 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     </label>
     <label class="switch" for="moving">
       <input type="checkbox" id="moving" checked>
-      <div><b>계속 움직이는 부분은 무시</b><span class="hint">발표자 얼굴 화면, 자막, 시계처럼 계속 바뀌는 부분과 마우스 커서 이동은 '새 화면'으로 치지 않아요. 같은 슬라이드가 반복 저장되는 가장 흔한 원인입니다.</span></div>
+      <div><b>계속 움직이는 부분은 무시</b><span class="hint">발표자 얼굴 화면, 시계처럼 계속 바뀌는 부분과 마우스 커서 이동은 '새 화면'으로 치지 않아요. 같은 슬라이드가 반복 저장되는 가장 흔한 원인입니다.</span></div>
+    </label>
+    <label class="switch" for="caps">
+      <input type="checkbox" id="caps" checked>
+      <div><b>자막이 바뀌어도 새로 찍기</b><span class="hint">화면에 박힌 자막이 바뀌면 같은 슬라이드라도 한 장 더 남겨요. 화면과 자막이 둘 다 같을 때만 건너뛰어요. 끄면 자막 변화는 무시해요.</span></div>
     </label>
     <label class="switch" for="merge">
       <input type="checkbox" id="merge" checked>
@@ -339,7 +358,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
   "use strict";
   var $ = function (s) { return document.querySelector(s); };
   var jobsEl = $("#jobs"), goBtn = $("#go"), barStatus = $("#barStatus");
-  var state = { jobs: [], running: false, stopReq: false, interval: 5, skipDup: true, ignoreMoving: true, merge: true, minPx: 30, maxW: 0, quality: 0.9, mode: "file", speed: 2, ytMode: "jump" };
+  var state = { jobs: [], running: false, stopReq: false, interval: 5, skipDup: true, ignoreMoving: true, capCaps: true, merge: true, minPx: 30, maxW: 0, quality: 0.9, mode: "file", speed: 2, ytMode: "jump" };
   var seq = 0, wakeLock = null;
 
   // ---------- helpers ----------
@@ -399,19 +418,19 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
   // ---------- settings (remembered on this phone) ----------
   var PREF_KEY = "lecture-capture-settings-v2";
   function savePrefs() {
-    try { localStorage.setItem(PREF_KEY, JSON.stringify({ interval: state.interval, skipDup: state.skipDup, ignoreMoving: state.ignoreMoving, merge: state.merge, minPx: state.minPx, maxW: state.maxW, mode: state.mode, speed: state.speed, ytMode: state.ytMode })); } catch (e) {}
+    try { localStorage.setItem(PREF_KEY, JSON.stringify({ interval: state.interval, skipDup: state.skipDup, ignoreMoving: state.ignoreMoving, capCaps: state.capCaps, merge: state.merge, minPx: state.minPx, maxW: state.maxW, mode: state.mode, speed: state.speed, ytMode: state.ytMode })); } catch (e) {}
   }
   function applyPrefsToUI() {
     document.querySelectorAll("#intervals .chip").forEach(function (c) { c.setAttribute("aria-pressed", Number(c.dataset.v) === state.interval ? "true" : "false"); });
-    $("#dup").checked = state.skipDup; $("#moving").checked = state.ignoreMoving; $("#merge").checked = state.merge;
+    $("#dup").checked = state.skipDup; $("#moving").checked = state.ignoreMoving; $("#caps").checked = state.capCaps; $("#merge").checked = state.merge;
     $("#sens").value = String(state.minPx); $("#size").value = String(state.maxW);
     lockSettings(false);
   }
   try {
     var saved = JSON.parse(localStorage.getItem(PREF_KEY) || "null");
     if (saved) {
-      if (saved.interval >= 1 && saved.interval <= 10) state.interval = saved.interval;
-      ["skipDup", "ignoreMoving", "merge"].forEach(function (k) { if (typeof saved[k] === "boolean") state[k] = saved[k]; });
+      if ([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].indexOf(saved.interval) >= 0) state.interval = saved.interval;
+      ["skipDup", "ignoreMoving", "capCaps", "merge"].forEach(function (k) { if (typeof saved[k] === "boolean") state[k] = saved[k]; });
       if ([30, 80, 300].indexOf(saved.minPx) >= 0) state.minPx = saved.minPx;
       if ([0, 1280].indexOf(saved.maxW) >= 0) state.maxW = saved.maxW;
       if (saved.mode === "link" || saved.mode === "file") state.mode = saved.mode;
@@ -427,13 +446,14 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
   });
   $("#dup").addEventListener("change", function (e) { state.skipDup = e.target.checked; lockSettings(state.running); savePrefs(); });
   $("#moving").addEventListener("change", function (e) { state.ignoreMoving = e.target.checked; savePrefs(); });
+  $("#caps").addEventListener("change", function (e) { state.capCaps = e.target.checked; savePrefs(); });
   $("#merge").addEventListener("change", function (e) { state.merge = e.target.checked; savePrefs(); });
   $("#sens").addEventListener("change", function (e) { state.minPx = Number(e.target.value); savePrefs(); });
   $("#size").addEventListener("change", function (e) { state.maxW = Number(e.target.value); savePrefs(); });
   function lockSettings(on) {
     document.querySelectorAll("#intervals .chip").forEach(function (c) { c.disabled = on; });
     var off = on || !state.skipDup;
-    $("#dup").disabled = on; $("#moving").disabled = off; $("#merge").disabled = off; $("#sens").disabled = off; $("#size").disabled = on;
+    $("#dup").disabled = on; $("#moving").disabled = off; $("#caps").disabled = off; $("#merge").disabled = off; $("#sens").disabled = off; $("#size").disabled = on;
   }
   applyPrefsToUI();
 
@@ -701,7 +721,101 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
   // so "something appeared on empty background" can't spot it. Instead: the changed dots are grouped into spots, and two
   // small spots of about the same size where the picture that left one spot is the picture that arrived at the other
   // (the same arrow, moved) are left out. A changed digit or word is not the same picture in two places, so it stays.
+
+  var GW = 480;
+  // The mouse pointer's own picture, learned the first times it is seen moving clearly (two separate spots). With it a
+  // pointer that only crept a little over text (one smeared spot, not two) is still recognised: the arrow is found where
+  // the change is, in the old picture at one place and in the new one at another, and the change is nothing else.
+  function learnTpl(A, B, sp, pctx) {
+    var w = GW, tw = sp.x1 - sp.x0 + 1, th = sp.y1 - sp.y0 + 1, px = [];
+    if (tw < 3 || th < 4 || tw > 30 || th > 34) return;
+    for (var y = sp.y0; y <= sp.y1; y++) for (var x = sp.x0; x <= sp.x1; x++) {
+      var j = y * w + x, d = A.g[j] - B.g[j];
+      if (d >= TH || d <= -TH) px.push(x - sp.x0, y - sp.y0, B.g[j]);
+    }
+    var n = px.length / 3, old = pctx.tpl;
+    if (n < 10 || n > 300) return;
+    if (old && old.seen >= 3 && (n < old.n * 0.5 || n > old.n * 2)) return;
+    pctx.tpl = { w: tw, h: th, n: n, px: px, seen: old ? old.seen + 1 : 1 };
+  }
+  
+  function tplAt(S, x, y, T, gw, gh) {
+    var g = S.g, p = T.px, sum = 0;
+    for (var k = 0; k < p.length; k += 3) {
+      var xx = x + p[k], yy = y + p[k + 1];
+      if (xx < 0 || yy < 0 || xx >= gw || yy >= gh) return 999;
+      sum += Math.abs(g[yy * gw + xx] - p[k + 2]);
+    }
+    return sum / T.n;
+  }
+  // where in S the arrow is that is not in O at the same place: best (score in S) against (score in O)
+  function findTpl(S, O, x0, y0, x1, y1, T, gw, gh) {
+    var best = { s: 999, o: 0, x: 0, y: 0 }, bestD = 1e9;
+    for (var y = y0 - T.h + 1; y <= y1; y++) for (var x = x0 - T.w + 1; x <= x1; x++) {
+      var s = tplAt(S, x, y, T, gw, gh); if (s > 26) continue;
+      var o = tplAt(O, x, y, T, gw, gh); if (s - o < bestD) { bestD = s - o; best = { s: s, o: o, x: x, y: y }; }
+    }
+    return best;
+  }
+  function pointerCrept(A, B, G, mask, pctx, r) {
+    var T = pctx && pctx.tpl;
+    if (!T || T.seen < 2 || r.C < 8 || r.C > Math.max(150, 4 * T.n)) return null;
+    var a = A.g, b = B.g, w = G.w, h = G.h, bo = G.blockOf, i, df, pts = [];
+    for (i = 0; i < G.n; i++) {
+      df = a[i] - b[i]; if (df < TH && df > -TH) continue; if (mask[bo[i]]) continue;
+      pts.push(i % w, (i / w) | 0); if (pts.length > 1200) return null;
+    }
+    if (!pts.length) return null;
+    // changed dots in clumps (8-dot cells, touching cells join): the pointer leaves one clump where it was and makes one
+    // where it is now, or a single smeared clump when it crept only a little
+    var cw = (w >> 3) + 1, cell = new Int32Array(cw * ((h >> 3) + 1)).fill(-1), clumps = [], k, q;
+    for (k = 0; k < pts.length; k += 2) cell[(pts[k + 1] >> 3) * cw + (pts[k] >> 3)] = -2;
+    for (k = 0; k < pts.length; k += 2) {
+      var c0 = (pts[k + 1] >> 3) * cw + (pts[k] >> 3); if (cell[c0] !== -2) continue;
+      var id = clumps.length, st = [c0], cl = { x0: 1e9, y0: 1e9, x1: -1, y1: -1 }; cell[c0] = id; clumps.push(cl);
+      if (clumps.length > 3) return null;
+      while (st.length) {
+        var cc = st.pop(), cx = cc % cw, cy = (cc / cw) | 0;
+        for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
+          var nk = (cy + dy) * cw + cx + dx; if (cx + dx < 0 || cx + dx >= cw || nk < 0 || nk >= cell.length) continue;
+          if (cell[nk] === -2) { cell[nk] = id; st.push(nk); }
+        }
+      }
+    }
+    for (k = 0; k < pts.length; k += 2) {
+      var cl2 = clumps[cell[(pts[k + 1] >> 3) * cw + (pts[k] >> 3)]];
+      if (pts[k] < cl2.x0) cl2.x0 = pts[k]; if (pts[k] > cl2.x1) cl2.x1 = pts[k]; if (pts[k + 1] < cl2.y0) cl2.y0 = pts[k + 1]; if (pts[k + 1] > cl2.y1) cl2.y1 = pts[k + 1];
+    }
+    var boxes = [], inA = null, inB = null;
+    for (q = 0; q < clumps.length; q++) {
+      var c = clumps[q];
+      if (c.x1 - c.x0 + 1 > 2 * T.w + 20 || c.y1 - c.y0 + 1 > 2 * T.h + 20) return null;
+      var pa = findTpl(A, B, c.x0, c.y0, c.x1, c.y1, T, w, h), pb = findTpl(B, A, c.x0, c.y0, c.x1, c.y1, T, w, h);
+      // the arrow was here before and is gone now (or the other way round): clearly better where it is than where it was
+      if (pa.s <= 26 && pa.o >= pa.s + 12) { boxes.push(pa); if (!inA) inA = pa; }
+      if (pb.s <= 26 && pb.o >= pb.s + 12) { boxes.push(pb); if (!inB) inB = pb; }
+    }
+    if (!inA || !inB || (inA.x === inB.x && inA.y === inB.y)) return null;
+    var out = 0;
+    for (k = 0; k < pts.length; k += 2) {
+      var x = pts[k], y = pts[k + 1], hit = false;
+      for (q = 0; q < boxes.length && !hit; q++) { var p = boxes[q]; hit = x >= p.x - 1 && x <= p.x + T.w && y >= p.y - 1 && y <= p.y + T.h; }
+      if (!hit && ++out > 3) return null;
+    }
+    var m2 = new Uint8Array(mask);
+    boxes.forEach(function (p) {
+      for (var by = Math.max(0, (p.y - 1) >> 4); by <= Math.min(G.by - 1, (p.y + T.h) >> 4); by++)
+        for (var bx = Math.max(0, (p.x - 1) >> 4); bx <= Math.min(G.bx - 1, (p.x + T.w) >> 4); bx++) m2[by * G.bx + bx] = 1;
+    });
+    return analyze(A, B, G, m2);
+  }
   function analyzeX(A, B, G, mask, pctx) {
+    var r = analyzeX0(A, B, G, mask, pctx);
+    if (pctx && isNewScene(r, 1, pctx)) { var r2 = pointerCrept(A, B, G, mask, pctx, r); if (r2) return r2; }
+    return r;
+  }
+  function analyzeX0(A, B, G, mask, pctx) {
+    GW = G.w;
     var r = analyze(A, B, G, mask);
     if (r.C < 8 || r.C > 1500) return r;
     var a = A.g, b = B.g, w = G.w, h = G.h, n = G.n, bo = G.blockOf, cw = (w >> 2) + 1, chh = (h >> 2) + 1;
@@ -751,7 +865,9 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
       if (Math.abs(S.px - T.px) > 0.5 * Math.max(S.px, T.px)) continue;
       // (two parts of one changed letter are close together; an arrow that was moved far enough to leave two spots is not)
       if (Math.abs((S.x0 + S.x1) - (T.x0 + T.x1)) < 40 && Math.abs((S.y0 + S.y1) - (T.y0 + T.y1)) < 40) continue;
-      if (Math.min(same(S, T), same(T, S)) > 20) continue;
+      var sST = same(S, T), sTS = same(T, S);
+      if (Math.min(sST, sTS) > 20) continue;
+      if (pctx) learnTpl(A, B, sST <= sTS ? T : S, pctx);
       m2 = m2 || new Uint8Array(mask);
       [S, T].forEach(function (sp) {
         for (var yy = Math.max(0, (sp.y0 - 1) >> 4); yy <= Math.min(G.by - 1, (sp.y1 + 1) >> 4); yy++)
@@ -793,6 +909,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     var seenC = new Float32Array(G.nb), hitC = new Float32Array(G.nb), capScore = new Float32Array(G.nb);
     var onNow = new Uint8Array(G.nb), feed = new Float32Array(G.nb), capRow = Math.floor(G.by * 0.65);
     function learnMoving(sig, t) {
+      if (C.prevSig && Math.abs(t - C.prevT) < 0.2) return;
       if (useMask && C.prevSig) {
         var ch = blockChanges(C.prevSig, sig, G), dt = Math.abs(t - C.prevT), close = dt <= 0.4, fade = Math.exp(-Math.min(dt, 30) / 30);
         if (ch.frac < 0.15) {
@@ -805,10 +922,30 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
             if (rc >= 0.36 || capScore[b] >= 2.5) onNow[b] = 1; else if (rc < 0.28 && capScore[b] < 0.8) onNow[b] = 0;
             feed[b] = onNow[b];
           }
+          if (!useCaps) dropCaptionBand(feed);
           C.raw = buildMask(feed, G, {}, null); C.mask = widen(C.raw);
         }
       }
       C.prevSig = sig; C.prevT = t;
+    }
+    // When caption changes are to be photographed, a wide strip low in the picture is never ignored, even if it
+    // changes as often as a camera (captions that roll in word by word). A presenter camera is a box, not a strip.
+    function dropCaptionBand(m) {
+      var bx = G.bx, by = G.by, lab = new Int32Array(G.nb).fill(-1), st = [], id = 0;
+      for (var b0 = 0; b0 < G.nb; b0++) {
+        if (!m[b0] || lab[b0] >= 0) continue;
+        var cells = [], x0 = 1e9, x1 = -1, y0 = 1e9, y1 = -1; lab[b0] = id; st.push(b0);
+        while (st.length) {
+          var c = st.pop(), cx = c % bx, cy = (c / bx) | 0; cells.push(c);
+          if (cx < x0) x0 = cx; if (cx > x1) x1 = cx; if (cy < y0) y0 = cy; if (cy > y1) y1 = cy;
+          [c - 1, c + 1, c - bx, c + bx].forEach(function (k, i) {
+            if (k < 0 || k >= G.nb || (i === 0 && cx === 0) || (i === 1 && cx === bx - 1)) return;
+            if (m[k] && lab[k] < 0) { lab[k] = id; st.push(k); }
+          });
+        }
+        if (y1 >= capRow && x1 - x0 + 1 >= 0.3 * bx && y1 - y0 + 1 <= 0.3 * by) cells.forEach(function (k) { m[k] = 0; });
+        id++;
+      }
     }
     function look() {
       var sig;
@@ -827,10 +964,22 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     C.adopt = function (from) {
       var L = from.learned(); seenC.set(L.seenC); hitC.set(L.hitC); onNow.set(L.onNow);
       C.mask = new Uint8Array(from.mask); C.maskPct = from.maskPct;
-      C.pctx.ptr = from.pctx.ptr ? Object.assign({}, from.pctx.ptr) : null;
+      C.pctx.ptr = from.pctx.ptr ? Object.assign({}, from.pctx.ptr) : null; C.pctx.tpl = from.pctx.tpl || null;
     };
     C.learned = function () { return { seenC: seenC, hitC: hitC, onNow: onNow }; };
     C.reset = function (start) { C.scenes = []; C.kept = []; C.pending = null; C.prevSig = null; C.start = start; C.skips = 0; C.merges = 0; };
+    // Is the new screen still changing (a slide sliding in, a scroll)? A small spot about the size of the mouse pointer
+    // that moved since the last look is not: otherwise a pointer gliding over text keeps the screen "moving" for up to
+    // 5 s, and a caption that changes in that time would be lost.
+    function stillMoving(A, B) {
+      var r = analyzeX(A, B, G, C.mask, C.pctx);
+      if (!isNewScene(r, minPx, C.pctx)) return false;
+      var P = C.pctx.ptr, known = P && P.seen >= 2;
+      var cMax = known ? Math.max(120, 3 * P.px) : 200, wMax = known ? 2 * P.w + 12 : 30, hMax = known ? 2 * P.h + 12 : 34;
+      var x0 = Math.min(r.apB[0], r.dsB[0]), y0 = Math.min(r.apB[1], r.dsB[1]), x1 = Math.max(r.apB[2], r.dsB[2]), y1 = Math.max(r.apB[3], r.dsB[3]);
+      if (r.C <= cMax && (x1 < 0 || (x1 - x0 + 1 <= wMax && y1 - y0 + 1 <= hMax))) return false;
+      return true;
+    }
     C.step = function (t) {
       var sig = look(); if (!sig) return;
       learnMoving(sig, t);
@@ -844,8 +993,10 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
       if (last && !isNewScene(analyzeX(last.sig, sig, G, mask, pctx), minPx, pctx)) { C.pending = null; C.skips++; return; }
       // a new screen counts once it holds still for two looks in a row (the second look comes a quarter second after the first);
       // while it keeps changing (scrolling, an animation) it is followed, and photographed after 5 s at the latest
-      if (!C.pending) { C.pending = { sig: sig, t: t, n: 0 }; return; }
-      if (isNewScene(analyzeX(C.pending.sig, sig, G, mask, pctx), minPx, pctx) && t - C.pending.t < settle) { C.pending.sig = sig; C.pending.n++; return; }
+      if (!C.pending) { C.pending = { sig: sig, t: t, n: 0, at: t }; return; }
+      if (stillMoving(C.pending.sig, sig) && t - C.pending.t < settle) { C.pending.sig = sig; C.pending.n++; C.pending.at = t; return; }
+      // (with looks 0.1 s apart, it must also have held still for a quarter second)
+      if (t - C.pending.at < 0.24 && t - C.pending.t < settle) return;
       var t0 = t - C.pending.t > 1.5 ? t : C.pending.t; C.pending = null;
       commit(sig, t0, t);
     };
@@ -884,7 +1035,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
       var lastT = -1e9;
       parts.forEach(function (P) { P.scenes.forEach(function (sc) { all.push(sc); }); });
       all.sort(function (a, b) { return a.t - b.t; });
-      return all.filter(function (sc) { if (sc.t - lastT < Math.max(0.2, o.step * 0.5)) return false; lastT = sc.t; return true; });
+      return all.filter(function (sc) { if (sc.t - lastT < Math.max(0.05, o.step * 0.5)) return false; lastT = sc.t; return true; });
     }
     // two scenes are compared ignoring only what was moving around either of them (not everything that ever moved)
     var pair = {}, most = new Uint8Array(G.nb), votes = new Uint16Array(G.nb);
@@ -902,8 +1053,9 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     all.sort(function (a, b) { return a.t - b.t; });
     // reuse the mouse-pointer size the pieces learned, so a pointer that moved is not taken for a new scene at piece borders
     var best = null;
-    parts.forEach(function (P) { var q = P.pctx && P.pctx.ptr; if (q && (!best || q.seen > best.seen)) best = q; });
-    var out = [], kept = [], pctx = { ptr: best ? Object.assign({}, best) : null }, minPx = o.minPx;
+    var bestT = null;
+    parts.forEach(function (P) { var q = P.pctx && P.pctx.ptr; if (q && (!best || q.seen > best.seen)) best = q; var tq = P.pctx && P.pctx.tpl; if (tq && (!bestT || tq.seen > bestT.seen)) bestT = tq; });
+    var out = [], kept = [], pctx = { ptr: best ? Object.assign({}, best) : null, tpl: bestT }, minPx = o.minPx;
     function fuller(last, sc) { last.out.blob = sc.blob; last.out.ts = sc.ts; last.out.sig = sc.sig; last.sig = sc.sig; last.pi = sc.pi; if (tally) tally.merged++; }
     all.forEach(function (sc) {
       var last = kept.length ? kept[kept.length - 1] : null;
@@ -960,7 +1112,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     return (h >>> 0).toString(36) + "-" + f.size.toString(36);
   }
   // what a saved piece was made with: only pieces made with the same settings can be reused
-  function prefKey() { return ["f2", state.interval, state.skipDup, state.ignoreMoving, state.merge, state.minPx, state.maxW].join("|"); }
+  function prefKey() { return ["f3", state.interval, state.skipDup, state.ignoreMoving, state.capCaps, state.merge, state.minPx, state.maxW].join("|"); }
   function forget(key) { return Promise.all([dbDel("meta:" + key), dbDelAll("piece:" + key + ":")]); }
   function pad(n, w) { return String(n).padStart(w, "0"); }
   // is there unfinished work for this file (with the settings as they are now)?
@@ -1031,7 +1183,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
 
     var scale = state.maxW && vw > state.maxW ? state.maxW / vw : 1, G = makeGeom(vw, vh), lastPaint = 0;
     var step = state.interval, dedup = state.skipDup;
-    var o = { minPx: state.minPx, useCam: dedup && state.ignoreMoving, useCaps: dedup && state.ignoreMoving, doMerge: dedup && state.merge, dedup: dedup, q: state.quality, step: step,
+    var o = { minPx: state.minPx, useCam: dedup && state.ignoreMoving, useCaps: dedup && state.ignoreMoving && !state.capCaps, doMerge: dedup && state.merge, dedup: dedup, q: state.quality, step: step,
       onNew: function (sc) { job.count++; addTick(job, sc.t); sc.blobP.then(function (b) { if (b && job.status === "running") addThumb(job, b, sc.t, sc); }); },
       onMerge: function (sc) { sc.blobP.then(function (b) { if (b && job.status === "running") replaceThumb(job, sc, b); }); } };
     // every so often four looks a quarter second apart: that is how a presenter camera is told from a slide
@@ -1111,6 +1263,59 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
       job.lanes = lanes.length;
       // 2) every lane takes the next piece until none is left
       var take = function () { for (var k = 0; k < pieces.length; k++) if (pieces[k].state === 0) { pieces[k].state = 1; return pieces[k]; } return null; };
+      // Below a second, jumping to every moment costs more than playing: the lane plays its piece fast and looks at the
+      // frames as they come. If the browser skips more video than the interval between two looks, it goes back to the
+      // last look and plays slower from there (that player's top speed is lowered; it creeps back up while all is well).
+      var playPiece = function (L, pc, hardEnd) {
+        var v = L.v, C = L.C, TOL = Math.max(0.15, step * 1.5), PTOL = Math.min(0.6, TOL), NEXT = Math.min(0.25, step);
+        var lastT = -1, rewinding = false, done = false, burst = 0, gaps = 0, frameAt = Date.now(), gapAt = Date.now(), away = false;
+        L.rate = L.rate || 2; L.cap = L.cap || 16;
+        return goTo(v, pc.start).then(function (ok) {
+          if (!ok) { job.missed++; return -1; }
+          return new Promise(function (resolve) {
+            function setRate(r) { L.rate = r; try { v.playbackRate = r; } catch (e) {} }
+            function play() { try { var pp = v.play(); if (pp && pp.catch) pp.catch(function () {}); } catch (e) {} }
+            function back() { rewinding = lastT >= 0; try { v.currentTime = Math.max(pc.start, lastT); } catch (e) {} }
+            function finish() { if (done) return; done = true; clearInterval(guard); document.removeEventListener("visibilitychange", onVis); try { v.pause(); } catch (e) {} resolve(lastT); }
+            function again() { if (!done) { try { v.requestVideoFrameCallback(onFrame); } catch (e) { C.bad = true; finish(); } } }
+            function onVis() {
+              if (done) return;
+              if (document.hidden) { away = true; try { v.pause(); } catch (e) {} }
+              else if (away) { away = false; back(); play(); frameAt = Date.now(); again(); }
+            }
+            function onFrame(now, meta) {
+              if (done) return;
+              if (state.stopReq || C.bad || failed) return finish();
+              var t = meta && typeof meta.mediaTime === "number" ? meta.mediaTime : v.currentTime;
+              frameAt = Date.now();
+              if (rewinding) { if (Math.abs(t - lastT) > TOL) return again(); rewinding = false; }
+              else if (lastT >= 0 && t > lastT + (C.pending || burst > 0 ? PTOL : TOL) && L.rate > 0.5) {
+                L.cap = Math.max(0.5, L.rate * 0.8); setRate(L.cap); gapAt = Date.now(); gaps++; back(); return again();
+              } else if (lastT >= 0 && t < lastT - 1) return again();
+              if (bursts && step > 0.4 && t >= L.burstAt) { burst = 4; L.burstAt = t + burstEvery; }
+              if (lastT < 0 || t - lastT >= (burst > 0 ? 0.25 : C.pending ? NEXT : step) - 0.005) {
+                if (burst > 0) burst--;
+                lastT = t; C.step(t); pc.pos = Math.max(pc.pos, Math.min(pc.end, t));
+              }
+              if ((t >= pc.end && !(C.pending && t < hardEnd)) || t >= hardEnd || v.ended) return finish();
+              again();
+            }
+            var guard = setInterval(function () {
+              if (done || away) return;
+              if (state.stopReq || failed || C.bad) return finish();
+              if (v.ended) return finish();
+              if (v.paused) play();
+              if (Date.now() - frameAt > 8000) { frameAt = Date.now(); back(); play(); again(); }
+              // faster while nothing is skipped; the top speed creeps back up after 10 s without a skip
+              if (Date.now() - gapAt > 10000 && L.cap < 16) { L.cap = Math.min(16, L.cap * 1.2); gapAt = Date.now(); }
+              if (Date.now() - gapAt > 2000 && L.rate < L.cap) setRate(Math.min(L.cap, L.rate * 1.25));
+              paint();
+            }, 500);
+            document.addEventListener("visibilitychange", onVis);
+            setRate(L.rate); play(); again();
+          });
+        });
+      };
       var runLane = async function (L) {
         for (;;) {
           if (state.stopReq || failed) return;
@@ -1118,7 +1323,8 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
           L.pc = pc;
           var C = L.C, v = L.v, t = pc.start, grid = pc.start, burst = 0, lastT = -1, hardEnd = Math.min(dur, pc.end + 3);
           C.reset(pc.start); L.burstAt = pc.start + burstEvery / 2;
-          while (!state.stopReq && !C.bad && !failed) {
+          if (step < 1) lastT = await playPiece(L, pc, hardEnd);
+          else while (!state.stopReq && !C.bad && !failed) {
             if (t >= pc.end && !(C.pending && t < hardEnd)) break;
             var ok = await goTo(v, t);
             if (state.stopReq) break;
@@ -1155,7 +1361,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
         var sc = C.scenes[i], b = await sc.blobP;
         if (b) scenes.push({ t: sc.t, ts: sc.ts, g: sc.sig.g, blank: !!sc.sig.blank, blob: b });
       }
-      return { i: pc.i, start: pc.start, end: pc.end, mask: new Uint8Array(C.mask), ptr: C.pctx.ptr ? Object.assign({}, C.pctx.ptr) : null, scenes: scenes, skips: C.skips, merges: C.merges, samples: C.samples };
+      return { i: pc.i, start: pc.start, end: pc.end, mask: new Uint8Array(C.mask), ptr: C.pctx.ptr ? Object.assign({}, C.pctx.ptr) : null, tpl: C.pctx.tpl || null, scenes: scenes, skips: C.skips, merges: C.merges, samples: C.samples };
     }
 
     // 3) put everything in order (after a stop: what there is so far, so it can still be saved)
@@ -1169,7 +1375,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     closeAll();
     var tally = { skipped: 0, merged: 0 };
     var parts = recs.map(function (rec) {
-      return { start: rec.start, mask: rec.mask, pctx: { ptr: rec.ptr }, scenes: rec.scenes.map(function (sc) {
+      return { start: rec.start, mask: rec.mask, pctx: { ptr: rec.ptr, tpl: rec.tpl || null }, scenes: rec.scenes.map(function (sc) {
         return { t: sc.t, ts: sc.ts, blob: sc.blob, sig: { g: sc.g, blank: sc.blank, modes: new Int16Array(G.nb).fill(-1) } };
       }) };
     });
