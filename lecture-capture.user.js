@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.20.1
+// @version      1.21.0
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -1111,15 +1111,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     });
     return bridgeP;
   }
+  var bridgeWhy = "";
   function bridgePut(item, blob) {
     return bridge().then(function (ok) {
-      if (!ok || !blob) return false;
+      if (!ok) { bridgeWhy = "'강의 캡처 연결' 스크립트가 응답하지 않음"; return false; }
+      if (!blob) { bridgeWhy = "보낼 자료 없음"; return false; }
       return new Promise(function (res) {
         var ref = Math.random().toString(36).slice(2), t = 0;
-        function on(e) { var d = e.data; if (e.source === window && d && d.lcb === 1 && d.dir === "out" && d.ref === ref && (d.op === "put-ok" || d.op === "put-fail")) { window.removeEventListener("message", on); clearTimeout(t); res(d.op === "put-ok"); } }
+        function on(e) { var d = e.data; if (e.source === window && d && d.lcb === 1 && d.dir === "out" && d.ref === ref && (d.op === "put-ok" || d.op === "put-fail")) { window.removeEventListener("message", on); clearTimeout(t); if (d.op !== "put-ok") bridgeWhy = "저장 실패: " + (d.why || "?"); res(d.op === "put-ok"); } }
         window.addEventListener("message", on);
         try { window.postMessage({ lcb: 1, dir: "in", op: "put", ref: ref, item: item, blob: blob }, "*"); } catch (e) { window.removeEventListener("message", on); return res(false); }
-        t = setTimeout(function () { window.removeEventListener("message", on); res(false); }, 180000);
+        t = setTimeout(function () { window.removeEventListener("message", on); bridgeWhy = "저장이 3분 안에 끝나지 않음"; res(false); }, 180000);
       });
     });
   }
@@ -1134,6 +1136,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   }
   async function saveZip(title, scenes, waitMs, extra) {
     var handOver = !!(extra && prefs.mode === "digest") && await bridge(), lite = handOver ? new JSZip() : null;
+    if (extra && prefs.mode === "digest" && !handOver) bridgeWhy = "'강의 캡처 연결' 스크립트가 응답하지 않음";
     var zip = new JSZip();
     for (var i = 0; i < scenes.length; i++) {
       var b = await scenes[i].blobP;
@@ -1170,7 +1173,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, lb); } catch (e) { handed = false; }
     }
     await sleep(waitMs == null ? 2500 : waitMs);
-    return { handed: handed };
+    return { handed: handed, why: handed ? "" : bridgeWhy };
   }
 
   // ---------- panel (shadow DOM, no innerHTML: YouTube enforces Trusted Types) ----------
@@ -2099,16 +2102,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (miss.n) note += " · 찍지 못한 사진 " + miss.n + "장";
         var shotSecs = (Date.now() - began) / 1000 - findSecs;
         res.note = [miss.size, miss.lower ? "화질을 " + miss.lower + "로 낮춰 찍었어요" : "",
-          "찾기 " + clock(findSecs) + (findSecs > 3 && findLen > 30 ? "(평균 " + (findLen / findSecs).toFixed(1) + "배속, 플레이어 최대 " + mostPlayers + "개)" : ""), "찍기 " + clock(shotSecs)].filter(Boolean).join(" · ");
+          "찾기 " + clock(findSecs) + (findSecs > 3 && findLen > 30 ? "(평균 " + (findLen / findSecs).toFixed(1) + "배속, 플레이어 최대 " + mostPlayers + "개)" : ""), "찍기 " + clock(shotSecs) + (miss.most ? "(플레이어 최대 " + miss.most + "개)" : "")].filter(Boolean).join(" · ");
       }
       ui.status(label, "ZIP 만드는 중…");
       var trn = res.subsP ? await Promise.race([res.subsP, bsleep(30000).then(function () { return null; })]) : null;
       if (!(trn && trn.ok) && prefs.subs !== false) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
       if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
       var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null);
-      res.handed = !!(sv && sv.handed);
+      res.handed = !!(sv && sv.handed); res.handWhy = sv && sv.why || "";
       res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" + (trn && trn.why ? "(" + String(trn.why).slice(0, 60) + ")" : "") : "";
-      if (res.subsInfo) res.note = [res.note, res.subsInfo, res.handed ? "정리 노트로 보냄" : ""].filter(Boolean).join(" · ");
+      if (res.subsInfo) res.note = [res.note, res.subsInfo, res.handed ? "정리 노트로 보냄" : prefs.mode === "digest" ? "정리 노트 자동 전달 안 됨(" + (res.handWhy || "?") + ")" : ""].filter(Boolean).join(" · ");
       res.status = "done"; res.count = scenes.length; res.secs = (Date.now() - began) / 1000;
       if (sessionCap && !backoffs && !undone) sessionCap += 2;
       if (note) { res.status = "bad"; res.msg = "사진 " + scenes.length + "장 저장" + note + " (그 부분만 빠졌어요)"; }
@@ -2172,7 +2175,16 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         });
         players.forEach(give);
       }
-      var want = Math.max(1, Math.min(mobile ? ((navigator.deviceMemory || 8) <= 4 ? 2 : 3) : 6, Math.ceil(todo.length / 8))), lastTick = Date.now();
+      // How many photo players: start low (a full-quality player is heavy for a phone), then add one at a time while the
+      // photos come in faster, and stop when they don't. 720p and below is light enough for more. The count that worked
+      // is remembered for this device and quality class; a crash lowers it.
+      var heavy = /^(max|hd2160|hd1440|hd1080)$/.test(q), cls = heavy ? "h" : "l", SHOTKEY = "lecture-capture-shots-v2";
+      var memory = load(SHOTKEY, {}), lowMem = (navigator.deviceMemory || 8) <= 4;
+      var capP = mobile ? (heavy ? (lowMem ? 3 : 4) : (lowMem ? 5 : 6)) : 8;
+      var startP = memory[cls] || (mobile ? (heavy ? 2 : lowMem ? 3 : 4) : 4);
+      var want = Math.max(1, Math.min(capP, startP, Math.ceil(todo.length / 8))), lastTick = Date.now();
+      // (the speed is measured from 4 s after a player was added - it first has to load - over the next 10 s)
+      var ramp = { on: true, baseAt: Date.now() + 4000, base: null, at: Date.now() + 14000, before: null, best: 0, adding: false };
       await add(want);
       while (!stopReq) {
         await bsleep(500);
@@ -2202,11 +2214,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           await bsleep(1500);
           await add(1);
         }
-        ui.status(label, title.slice(0, 26) + " · 사진 찍는 중 " + got + " / " + total + "장" + (out.lower ? " (" + out.lower + ")" : ""));
+        out.most = Math.max(out.most || 0, live.length);
+        // more players while it pays (not after a crash, and only while there is enough left to share)
+        if (ramp.on && !crashes && !ramp.adding && live.length && !ramp.base && now >= ramp.baseAt) ramp.base = { got: got, t: now };
+        if (ramp.on && !crashes && !ramp.adding && live.length && ramp.base && now >= ramp.at) {
+          var rate = (got - ramp.base.got) / Math.max(1, (now - ramp.base.t) / 1000), n = live.length, rest = total - got;
+          // clearly slower with the last one added: that was one too many; otherwise keep adding while there is enough left
+          if (ramp.before && rate < ramp.before.rate * 0.9) { ramp.on = false; ramp.best = ramp.before.n; }
+          else if (n < capP && rest > n * 4) {
+            ramp.before = { n: n, rate: rate }; ramp.best = n; ramp.adding = true;
+            add(1).then(function () { ramp.adding = false; ramp.base = null; ramp.baseAt = Date.now() + 4000; ramp.at = Date.now() + 14000; }, function () { ramp.adding = false; ramp.on = false; });
+          } else { ramp.on = false; ramp.best = n; }
+        }
+        ui.status(label, title.slice(0, 26) + " · 사진 찍는 중 " + got + " / " + total + "장 · 플레이어 " + live.length + "개" + (out.lower ? " (" + out.lower + ")" : ""));
         if (stage && stage.ownerDocument) { var hdr = stage.ownerDocument.getElementById("lc-per"); if (hdr) hdr.textContent = "사진 찍는 플레이어 " + live.length + "개: " + live.map(function (P) { return P.diag || (P.batch ? "찍는 중" : "대기"); }).join(" · "); }
       }
       players.forEach(function (P) { if (P.alive) { post(P, { type: "stop" }); } delete waiters[P.key]; });
       closeStage();
+      // remember what this device managed: what paid off, or one less than what crashed
+      try {
+        if (crashes) memory[cls] = Math.max(1, Math.min(memory[cls] || capP, (out.most || 2) - 1));
+        else if (ramp.best && !stopReq) memory[cls] = Math.max(ramp.best, Math.min(memory[cls] || 0, capP));
+        save(SHOTKEY, memory);
+      } catch (e) {}
       scenes.forEach(function (scn) { if (!scn.blobP && !scn.gone) { if (scn.spare) scn.blobP = copyPic(scn.spare); else out.n++; } });
       return out;
     }

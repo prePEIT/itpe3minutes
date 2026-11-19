@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 캡처 연결 (정리 노트 자동 전달)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.20.1
+// @version      1.21.0
 // @description  강의 화면 캡처가 만든 정리자료와 LiveWiki 대본을 영상 정리 노트 페이지로 자동으로 넘깁니다.
 // @match        https://prepeit.github.io/itpe3minutes/lecture-capture.html*
 // @match        https://livewiki.com/*
@@ -41,12 +41,16 @@
     watch: function (cb) { try { chrome.storage.onChanged.addListener(function (ch, area) { if (area === "local" && ch[IDX]) cb(); }); } catch (e) {} }
   };
   if (!store) return;
+  // Tampermonkey runs scripts with storage rights behind a wrapper: `window` there is not the page's window object, so
+  // "did this come from this page?" must compare with the real one (unsafeWindow), and frames are told apart by .self/.top
+  var W = window; try { if (typeof unsafeWindow !== "undefined" && unsafeWindow) W = unsafeWindow; } catch (e) {}
+  function isSelf(src) { try { return !!src && (src === W || src === window || src === W.self || src.self === W.self); } catch (e) { return false; } }
   var host = location.hostname;
   var canPut = host === "prepeit.github.io" || /(^|\.)livewiki\.com$/.test(host) || host === "www.youtube.com" || host === "m.youtube.com";
   var NOTE_PAGES = ["/artifact/7HE9i4d6W8yGdhMBpD8Yx5"];
-  function isInbox() { return host === "claude.ai" && window.top === window && NOTE_PAGES.some(function (p) { return location.pathname.indexOf(p) === 0; }); }
+  function isInbox() { var top = false; try { top = W.top === W.self; } catch (e) {} return host === "claude.ai" && top && NOTE_PAGES.some(function (p) { return location.pathname.indexOf(p) === 0; }); }
   var noteFrame = null;
-  function out(o, to) { try { (to || window).postMessage(Object.assign({ lcb: 1, dir: "out" }, o), "*"); } catch (e) {} }
+  function out(o, to) { try { (to || W).postMessage(Object.assign({ lcb: 1, dir: "out" }, o), "*"); } catch (e) {} }
   var queue = Promise.resolve();
   function serial(fn) { queue = queue.then(fn, fn); return queue; }
   function b64of(blob) { return new Promise(function (res, rej) { var fr = new FileReader(); fr.onload = function () { var s = String(fr.result); res(s.slice(s.indexOf(",") + 1)); }; fr.onerror = function () { rej(fr.error); }; fr.readAsDataURL(blob); }); }
@@ -88,15 +92,15 @@
   window.addEventListener("message", function (e) {
     var d = e.data; if (!d || d.lcb !== 1 || d.dir !== "in") return;
     // the capture tool's own page (same window): ping and put
-    if (e.source === window) {
-      if (d.op === "ping" && canPut) out({ op: "hello", v: 2, put: true });
+    if (isSelf(e.source)) {
+      if (d.op === "ping" && canPut) out({ op: "hello", v: 3, put: true });
       if (d.op === "put" && canPut) serial(function () { return put(d).catch(function (er) { out({ op: "put-fail", ref: d.ref, why: String(er && er.message || er) }); }); });
       return;
     }
     // the note page: its artifact frame inside the note page's own claude.ai address
     if (!isInbox() || !e.source || !(e.origin === "null" || /^https:\/\/[\w-]+(\.[\w-]+)*\.claudeusercontent\.com$/.test(e.origin || ""))) return;
     var to = e.source; noteFrame = to;
-    if (d.op === "ping") return out({ op: "hello", v: 2, inbox: true }, to);
+    if (d.op === "ping") return out({ op: "hello", v: 3, inbox: true }, to);
     if (d.op === "list") return serial(function () { return list(to); });
     if (d.op === "get") return serial(function () { return get(d, to); });
     if (d.op === "done") return serial(function () { return done(d, to); });
