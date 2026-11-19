@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.19.0
+// @version      1.20.1
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -714,6 +714,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (isAd(P.mp)) { trySkipAd(P.doc); P.ads++; P.diag = "광고"; try { v.play(); } catch (e) {} await sleep(500); continue; }
         dismissStillWatching(P.doc);
         var ok = await goTo(t);
+        if (!ok && v.duration && t > v.duration - 3) break;   // the very end (end screen, rounding of the length): done
         if (!ok) { P.err = playerError(P.doc) || ""; P.diag = P.err ? "유튜브 오류" : "로딩"; if (++fails >= 4) { fails = 0; t += 0.25; } continue; }   // keeps failing at one spot: nudge past it
         P.err = "";
         fails = 0;
@@ -1097,7 +1098,42 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
   }
 
+  // The companion script ('강의 캡처 연결') keeps packages for the note page (claude.ai) in its own storage, the one
+  // place both sites can reach. It answers a ping on this page if it is installed.
+  var bridgeP = null;
+  function bridge() {
+    if (bridgeP) return bridgeP;
+    bridgeP = new Promise(function (res) {
+      var got = false, n = 0;
+      function on(e) { var d = e.data; if (e.source === window && d && d.lcb === 1 && d.dir === "out" && d.op === "hello") { got = true; window.removeEventListener("message", on); res(true); } }
+      window.addEventListener("message", on);
+      (function ping() { if (got) return; if (n++ > 12) { window.removeEventListener("message", on); return res(false); } try { window.postMessage({ lcb: 1, dir: "in", op: "ping" }, "*"); } catch (e) {} setTimeout(ping, 250); })();
+    });
+    return bridgeP;
+  }
+  function bridgePut(item, blob) {
+    return bridge().then(function (ok) {
+      if (!ok || !blob) return false;
+      return new Promise(function (res) {
+        var ref = Math.random().toString(36).slice(2), t = 0;
+        function on(e) { var d = e.data; if (e.source === window && d && d.lcb === 1 && d.dir === "out" && d.ref === ref && (d.op === "put-ok" || d.op === "put-fail")) { window.removeEventListener("message", on); clearTimeout(t); res(d.op === "put-ok"); } }
+        window.addEventListener("message", on);
+        try { window.postMessage({ lcb: 1, dir: "in", op: "put", ref: ref, item: item, blob: blob }, "*"); } catch (e) { window.removeEventListener("message", on); return res(false); }
+        t = setTimeout(function () { window.removeEventListener("message", on); res(false); }, 180000);
+      });
+    });
+  }
+  // a lighter copy of a photo for the hand-over (at most 1280 wide, JPEG 75%)
+  async function lighter(b) {
+    try {
+      var bmp = await createImageBitmap(b), s = Math.min(1, 1280 / bmp.width), c = document.createElement("canvas");
+      c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s); c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height); try { bmp.close(); } catch (e) {}
+      var o = await new Promise(function (r) { c.toBlob(r, "image/jpeg", 0.75); });
+      return o && o.size < b.size ? o : b;
+    } catch (e) { return b; }
+  }
   async function saveZip(title, scenes, waitMs, extra) {
+    var handOver = !!(extra && prefs.mode === "digest") && await bridge(), lite = handOver ? new JSZip() : null;
     var zip = new JSZip();
     for (var i = 0; i < scenes.length; i++) {
       var b = await scenes[i].blobP;
@@ -1105,13 +1141,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var data = b; try { data = await new Response(b).arrayBuffer(); } catch (e) {}
       var fname = String(i + 1).padStart(4, "0") + "_" + fmt(scenes[i].t) + ".jpg";
       zip.file(fname, data, { binary: true }); if (extra) (extra.photos = extra.photos || []).push({ file: fname, t: Math.round(scenes[i].t * 10) / 10 });
+      if (lite) lite.file(fname, await lighter(new Blob([data], { type: "image/jpeg" })), { binary: true });
     }
     // for writing it up later (the 'video digest' page or a chat with Claude): the words and where each photo sits in time
     if (extra) {
       var tr = extra.subs && extra.subs.ok ? extra.subs : null;
-      if (tr) zip.file("transcript.txt", transcriptText(Object.assign({ title: title }, extra), tr));
-      zip.file("digest-data.json", JSON.stringify({ kind: "lecture-capture", version: 1, title: title, id: extra.id, url: watchUrl(extra.id), duration: extra.dur || 0,
-        transcript: tr ? { source: tr.source, lang: tr.lang, name: tr.name, segs: tr.segs } : null, photos: extra.photos || [] }));
+      var ttxt = tr ? transcriptText(Object.assign({ title: title }, extra), tr) : null;
+      var djson = JSON.stringify({ kind: "lecture-capture", version: 1, title: title, id: extra.id, url: watchUrl(extra.id), duration: extra.dur || 0,
+        transcript: tr ? { source: tr.source, lang: tr.lang, name: tr.name, segs: tr.segs } : null, photos: extra.photos || [] });
+      if (ttxt) zip.file("transcript.txt", ttxt);
+      zip.file("digest-data.json", djson);
+      if (lite) { if (ttxt) lite.file("transcript.txt", ttxt); lite.file("digest-data.json", djson); }
     }
     var blob = await zip.generateAsync({ type: "blob", compression: "STORE", streamFiles: true });
     // the download link is clicked inside a hidden frame: Firefox closes the work window when this page itself "navigates" to a download
@@ -1124,7 +1164,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (f) f.remove();
       var a2 = document.createElement("a"); a2.href = url; a2.download = name; document.body.appendChild(a2); a2.click(); a2.remove();
     }
+    var handed = false;
+    if (lite) {
+      try { var lb = await lite.generateAsync({ type: "blob", compression: "STORE" });
+        handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, lb); } catch (e) { handed = false; }
+    }
     await sleep(waitMs == null ? 2500 : waitMs);
+    return { handed: handed };
   }
 
   // ---------- panel (shadow DOM, no innerHTML: YouTube enforces Trusted Types) ----------
@@ -1162,7 +1208,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var li = h("li", { style: "list-style:none;margin:10px 0 0 -16px" });
     var a = h("a", { href: DIGEST_URL, target: "_blank", rel: "noopener", text: "다음 단계: 정리 노트 만들기 →", style: "display:block;text-align:center;padding:10px;border-radius:8px;background:var(--ac);color:var(--ai);font-weight:700;text-decoration:none" });
     li.appendChild(a);
-    li.appendChild(h("div", { text: "열린 페이지에서 방금 받은 '_정리자료.zip'을 고르면 Claude가 바로 정리해요.", style: "font-size:11px;color:var(--mu);margin-top:4px" }));
+    li.appendChild(h("div", { text: "'강의 캡처 연결' 스크립트가 있으면 자료가 자동으로 넘어가고, 없으면 열린 페이지에서 '_정리자료.zip'을 고르면 돼요.", style: "font-size:11px;color:var(--mu);margin-top:4px" }));
     return li;
   }
   // opens LiveWiki for one video (its address goes along and is typed in there; it is also copied, just in case)
@@ -1204,7 +1250,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("button", { id: "go", text: "캡처 시작" }),
         h("div", { class: "st", id: "st" }),
         h("ol", { class: "res", id: "res" }),
-        h("p", { class: "note", id: "pnote", text: noteText })
+        h("p", { class: "note", id: "pnote", text: noteText }),
+        h("a", { href: DIGEST_URL, target: "_blank", rel: "noopener", text: "내 정리 노트 보기 →", style: "color:var(--ac);font-weight:700;text-decoration:none;font-size:12px" })
       ])
     ]));
     var $ = function (id) { return root.getElementById(id); };
@@ -1683,7 +1730,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       (function tick() {
         if (cancel) return;
         if (left <= 0) { location.href = DIGEST_URL; return; }
-        sp.textContent = left + "초 뒤 정리 노트 페이지로 넘어가요. 거기서 방금 받은 ZIP을 고르기만 하면 돼요."; left--;
+        sp.textContent = left + "초 뒤 정리 노트 페이지로 넘어가요. " + (results.some(function (x) { return x.handed; }) ? "자료는 자동으로 넘어가서 바로 정리돼요." : "거기서 방금 받은 ZIP을 고르기만 하면 돼요."); left--;
         setTimeout(tick, 1000);
       })();
     }
@@ -1991,6 +2038,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       players.forEach(function (P) { if (P.alive) post(P, { type: "stop" }); delete waiters[P.key]; });
       closeStage();
       var findSecs = (Date.now() - began) / 1000, findLen = Math.max(0, dur - preDone);
+      segs.forEach(function (sg) { if (!sg.done && !stopReq && dur - sg.start <= 8) { sg.done = true; sg.tail = true; } });
       var undone = segs.filter(function (sg) { return !sg.done; }).length;
       if (everMoved) embedsWorked = true;
       // the same pieces left over five times in a row: those really can't be read; finish without them
@@ -2057,9 +2105,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var trn = res.subsP ? await Promise.race([res.subsP, bsleep(30000).then(function () { return null; })]) : null;
       if (!(trn && trn.ok) && prefs.subs !== false) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
       if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
-      await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null);
+      var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null);
+      res.handed = !!(sv && sv.handed);
       res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" + (trn && trn.why ? "(" + String(trn.why).slice(0, 60) + ")" : "") : "";
-      if (res.subsInfo) res.note = [res.note, res.subsInfo].filter(Boolean).join(" · ");
+      if (res.subsInfo) res.note = [res.note, res.subsInfo, res.handed ? "정리 노트로 보냄" : ""].filter(Boolean).join(" · ");
       res.status = "done"; res.count = scenes.length; res.secs = (Date.now() - began) / 1000;
       if (sessionCap && !backoffs && !undone) sessionCap += 2;
       if (note) { res.status = "bad"; res.msg = "사진 " + scenes.length + "장 저장" + note + " (그 부분만 빠졌어요)"; }
@@ -2496,7 +2545,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var body = head.concat(segs.map(function (x) { return "[" + clockT(x.t) + "] " + x.text; })).join("\n") + "\n";
       downloadBlob(new Blob([body], { type: "text/plain;charset=utf-8" }), safeName(title()) + "_대본.txt");
       try { sessionStorage.setItem("lc-lw-saved:" + (id || title()), String(segs.length)); } catch (e) {}
-      say((auto ? "대본을 저장했어요: " : "저장했어요: ") + segs.length + "줄. 정리 노트 페이지에서 정리자료 ZIP과 이 파일을 함께 고르세요.");
+      say((auto ? "대본을 저장했어요: " : "저장했어요: ") + segs.length + "줄. 정리 노트로 보내는 중…");
+      bridgePut({ kind: "txt", name: safeName(title()) + "_대본.txt", id: id || "", title: title(), words: true }, new Blob([body], { type: "text/plain;charset=utf-8" })).then(function (ok) {
+        if (!ok) { say("대본을 저장했어요: " + segs.length + "줄. 정리 노트 페이지에서 정리자료 ZIP과 이 파일을 함께 고르세요."); return; }
+        var left = 6, stay = false, sb = h("button", { text: "여기 머무르기", style: "background:var(--bg);color:var(--ac)" });
+        root.querySelector(".b").appendChild(sb);
+        sb.addEventListener("click", function () { stay = true; sb.remove(); say("정리 노트로 보냈어요. 정리 노트 페이지를 열면 바로 정리돼요."); });
+        (function tick() { if (stay) return; if (left <= 0) { location.href = DIGEST_URL; return; } say("정리 노트로 보냈어요(" + segs.length + "줄). " + left + "초 뒤 정리 노트 페이지로 넘어가요."); left--; setTimeout(tick, 1000); })();
+      });
     }
     root.getElementById("lwSave").addEventListener("click", function () {
       var sg = readScript(); if (sg.length < 3) { say("화면에서 스크립트를 찾지 못했어요. LiveWiki의 '스크립트' 탭을 열고 다시 눌러 주세요."); return; }
