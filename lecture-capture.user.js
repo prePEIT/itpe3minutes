@@ -1,11 +1,13 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.17.0
+// @version      1.19.0
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
 // @match        https://prepeit.github.io/itpe3minutes/lecture-capture.html*
+// @match        https://livewiki.com/*
+// @match        https://*.livewiki.com/*
 // @grant        none
 // @updateURL    https://raw.githubusercontent.com/prePEIT/itpe3minutes/main/lecture-capture.user.js
 // @downloadURL  https://raw.githubusercontent.com/prePEIT/itpe3minutes/main/lecture-capture.user.js
@@ -45,6 +47,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // the "video digest" page (a claude.ai page of the owner's): the ZIPs and transcripts made here are written up there
   var DIGEST_URL = "https://claude.ai/artifact/7HE9i4d6W8yGdhMBpD8Yx5";
   var YT_ORIGIN = "https://www.youtube.com", YT_MOBILE = "https://m.youtube.com";
+  // LiveWiki (livewiki.com) writes transcripts for videos that have no captions: its script is picked up there
+  var LIVEWIKI_URL = "https://livewiki.com/ko";
   var PKEY = "lecture-capture-ext-prefs-v5", BKEY = "lecture-capture-best-v2", SKEY = "lecture-capture-safe-v1";
   var HOLD = 0.24, MAX_RATE = 16, YT_RATE = 2, SAMPLE = 0.25, GAP = 0.6, MOVE = 3;
 
@@ -930,6 +934,147 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (!segs.length) return { ok: false, why: "empty" };
     return { ok: true, source: tr.kind === "asr" ? "자동 생성 자막" : "자막", lang: tr.lang, name: tr.name, segs: tr.kind === "asr" ? joinLines(segs) : segs.map(function (x) { return { t: Math.round(x.t * 10) / 10, text: x.text }; }) };
   }
+
+  // ---------- the transcript, read on a YouTube watch page (richer than an embedded player) ----------
+  // Three ways, best first:
+  //  1) the "Show transcript" data YouTube's own page asks for (youtubei/v1/get_transcript, same site, no token needed);
+  //  2) the transcript panel itself, read from the page (computer layout);
+  //  3) the caption list YouTube's Android app gets, then the track itself;
+  //  4) the player's captions (getTranscript above).
+  function findDeep(o, key, depth) {
+    if (!o || typeof o !== "object" || depth > 40) return null;
+    if (Object.prototype.hasOwnProperty.call(o, key)) return o[key];
+    for (var k in o) { var r = findDeep(o[k], key, depth + 1); if (r) return r; }
+    return null;
+  }
+  function collectSegments(o, out, depth) {
+    if (!o || typeof o !== "object" || depth > 60) return out;
+    var r = o.transcriptSegmentRenderer;
+    if (r && r.startMs != null) {
+      var txt = r.snippet ? (r.snippet.simpleText || (r.snippet.runs || []).map(function (x) { return x.text; }).join("")) : "";
+      txt = String(txt || "").replace(/\s+/g, " ").trim();
+      if (txt) out.push({ t: Math.round(Number(r.startMs) / 100) / 10, d: r.endMs != null ? Math.max(0, (Number(r.endMs) - Number(r.startMs)) / 1000) : 0, text: txt });
+      return out;
+    }
+    for (var k in o) collectSegments(o[k], out, depth + 1);
+    return out;
+  }
+  function pageWin() { try { return window.wrappedJSObject || window; } catch (e) { return window; } }
+  function ytcfgGet(k) { try { var y = pageWin().ytcfg; return y && y.get ? y.get(k) : (y && y.data_ ? y.data_[k] : null); } catch (e) { return null; } }
+  function unx(s) { return String(s).replace(/\\x([0-9a-fA-F]{2})/g, function (_, h) { return String.fromCharCode(parseInt(h, 16)); }); }
+  async function transcriptParams(id) {
+    // the page as it is now (if it shows this video), else the watch page fetched afresh (YouTube changes pages without reloading)
+    // (the page's own data only if it really is this video: YouTube keeps the first page's data after moving on)
+    try { var D = pageWin().ytInitialData, cur = D && findDeep(D, "currentVideoEndpoint", 0);
+      if (cur && cur.watchEndpoint && cur.watchEndpoint.videoId === id) { var p0 = findDeep(D, "getTranscriptEndpoint", 0); if (p0 && p0.params) return p0.params; } } catch (e) {}
+    try {
+      var html = unx(await (await fetch("/watch?v=" + id, { credentials: "include" })).text());   // the phone page writes its data with \x22-style escapes
+      var m = /"getTranscriptEndpoint"\s*:\s*\{\s*"params"\s*:\s*"([^"]+)"/.exec(html);
+      if (m) return m[1];
+    } catch (e) {}
+    return null;
+  }
+  // automatic captions come in scraps of a few words: join them into readable lines; real sentences stay as they are
+  function tidySegs(segs) {
+    var avg = segs.reduce(function (a, x) { return a + x.text.length; }, 0) / Math.max(1, segs.length);
+    return avg < 20 ? joinLines(segs) : segs.map(function (x) { return { t: x.t, text: x.text }; });
+  }
+  async function transcriptFromApi(id) {
+    var params = await transcriptParams(id), ctx = ytcfgGet("INNERTUBE_CONTEXT");
+    if (!params) return { ok: false, why: "자막 없음(스크립트 버튼 없음)" };
+    if (!ctx) return { ok: false, why: "페이지 정보 없음" };
+    var key = ytcfgGet("INNERTUBE_API_KEY"), url = "/youtubei/v1/get_transcript?prettyPrint=false" + (key ? "&key=" + encodeURIComponent(key) : "");
+    var hd = { "Content-Type": "application/json" }, cn = ytcfgGet("INNERTUBE_CONTEXT_CLIENT_NAME"), cv = ytcfgGet("INNERTUBE_CONTEXT_CLIENT_VERSION");
+    if (cn) hd["X-Youtube-Client-Name"] = String(cn); if (cv) hd["X-Youtube-Client-Version"] = String(cv);
+    var r = await fetch(url, { method: "POST", credentials: "include", headers: hd, body: JSON.stringify({ context: ctx, params: params }) });
+    if (!r.ok) return { ok: false, why: "스크립트 요청 실패(" + r.status + ")" };
+    var segs = collectSegments(await r.json(), [], 0);
+    if (!segs.length) return { ok: false, why: "스크립트가 비어 있음" };
+    return { ok: true, source: "유튜브 스크립트", lang: "", name: "스크립트 표시", segs: tidySegs(segs) };
+  }
+  // the transcript panel, read like a person would (computer layout only)
+  async function transcriptFromPanel(id) {
+    if (parseId(location.href) !== id) return { ok: false, why: "다른 영상" };
+    function rows() {
+      var out = [];
+      document.querySelectorAll("ytd-transcript-segment-renderer, transcript-segment-view-model, ytm-transcript-segment-renderer").forEach(function (n) {
+        var ts = n.querySelector(".segment-timestamp, .ytwTranscriptSegmentViewModelTimestamp, [class*=imestamp]"), tx = n.querySelector(".segment-text, span[role=text], yt-formatted-string:not([class*=imestamp])");
+        var t = ts ? ts.textContent.trim() : "", m = /(\d+):(\d{2})(?::(\d{2}))?/.exec(t);
+        if (!m || !tx) return;
+        var sec = m[3] != null ? +m[1] * 3600 + +m[2] * 60 + +m[3] : +m[1] * 60 + +m[2];
+        var text = tx.textContent.replace(/\s+/g, " ").trim(); if (text) out.push({ t: sec, text: text });
+      });
+      return out;
+    }
+    var got = rows();
+    if (!got.length) {
+      var btn = document.querySelector("ytd-video-description-transcript-section-renderer button, button[aria-label*='스크립트'], button[aria-label*='ranscript']");
+      if (!btn) { var more = document.querySelector("tp-yt-paper-button#expand, #description-inline-expander #expand"); if (more) { more.click(); await sleep(600); btn = document.querySelector("ytd-video-description-transcript-section-renderer button, button[aria-label*='스크립트'], button[aria-label*='ranscript']"); } }
+      if (!btn) return { ok: false, why: "스크립트 버튼 없음" };
+      btn.click();
+      for (var i = 0; i < 40 && !got.length; i++) { await sleep(250); got = rows(); }
+      await sleep(500); got = rows();
+      try { var cl = document.querySelector("ytd-engagement-panel-section-list-renderer[target-id*=transcript] #visibility-button button, ytd-engagement-panel-title-header-renderer #visibility-button button"); if (cl) cl.click(); } catch (e) {}
+    }
+    return got.length ? { ok: true, source: "유튜브 스크립트", lang: "", name: "스크립트 패널", segs: tidySegs(got) } : { ok: false, why: "스크립트를 읽지 못함" };
+  }
+  async function transcriptFromAppList(id) {
+    var r = await fetch("/youtubei/v1/player?prettyPrint=false", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ context: { client: { clientName: "ANDROID", clientVersion: "20.10.38", hl: "ko" } }, videoId: id }) });
+    if (!r.ok) return { ok: false, why: "자막 목록 실패(" + r.status + ")" };
+    var j = await r.json(), list = [];
+    var tl = j && j.captions && j.captions.playerCaptionsTracklistRenderer;
+    (tl && tl.captionTracks || []).forEach(function (c) { var nm = c.name ? (c.name.simpleText || (c.name.runs || []).map(function (x) { return x.text; }).join("")) : ""; list.push({ lang: c.languageCode, kind: c.kind || "", name: nm || c.languageCode, url: c.baseUrl || "" }); });
+    if (!list.length) return { ok: false, why: "자막 트랙 없음" };
+    var tr = pickTrack(list); if (!tr.url) return { ok: false, why: "자막 주소 없음" };
+    var u = tr.url.replace(/&fmt=[^&]*/, "") + "&fmt=json3";
+    var b = await (await fetch(u.replace(/^https?:\/\/[^/]+/, ""), { credentials: "include" })).text();
+    var segs = b && b.length > 30 ? parseTimedtext(b) : [];
+    if (!segs.length) return { ok: false, why: "자막 내용 없음" };
+    return { ok: true, source: tr.kind === "asr" ? "자동 생성 자막" : "자막", lang: tr.lang, name: tr.name, segs: tr.kind === "asr" ? joinLines(segs) : segs.map(function (x) { return { t: Math.round(x.t * 10) / 10, text: x.text }; }) };
+  }
+  async function watchTranscript(id) {
+    var tried = [];
+    try { var a = await transcriptFromApi(id); if (a.ok) return a; tried.push(a.why); } catch (e) { tried.push("스크립트 요청 오류"); }
+    try { var b = await transcriptFromPanel(id); if (b.ok) return b; if (b.why !== "다른 영상") tried.push(b.why); } catch (e) { tried.push("패널 오류"); }
+    try { var d = await transcriptFromAppList(id); if (d.ok) return d; tried.push(d.why); } catch (e) { tried.push("자막 목록 오류"); }
+    try { var lw = transcriptFromLiveWikiPanel(id); if (lw.ok) return lw; } catch (e) {}
+    try {
+      var mp = document.getElementById("movie_player");
+      if (mp && parseId(location.href) === id) { var c = await getTranscript(mp); if (c && c.ok) return c; tried.push(c && c.why === "none" ? "자막 트랙 없음" : "플레이어 자막 실패(" + (c && c.why) + ")"); }
+    } catch (e) { tried.push("플레이어 오류"); }
+    tried = tried.filter(function (x, i) { return x && tried.indexOf(x) === i; });
+    // every way said "there are none": say it plainly
+    if (tried.every(function (x) { return /없음/.test(x); })) return { ok: false, none: true, why: "이 영상엔 자막 없음" };
+    return { ok: false, why: tried.join(", ") };
+  }
+
+  // "00:12" on a line of its own followed by the words, or "[00:12] words" / "00:12 words" on one line
+  function parseTimed(text) {
+    var out = [], pend = null, TIME = /^\s*\[?(\d{1,2}(?::\d{2}){1,2})\]?\s*$/, TIMED = /^\s*\[?(\d{1,2}(?::\d{2}){1,2})\]?\s*[-–:]?\s+(.+)$/;
+    function sec(c) { return c.split(":").map(Number).reduce(function (a, b) { return a * 60 + b; }, 0); }
+    String(text || "").replace(/\r/g, "").split("\n").forEach(function (ln) {
+      var m;
+      if ((m = TIME.exec(ln))) { pend = { t: sec(m[1]), text: "" }; out.push(pend); }
+      else if ((m = TIMED.exec(ln))) { pend = null; out.push({ t: sec(m[1]), text: m[2].trim() }); }
+      else if (ln.trim() && pend && pend.text.length < 400) pend.text += (pend.text ? " " : "") + ln.trim();
+    });
+    out = out.filter(function (x) { return x.text; });
+    // a script runs forward in time: keep the longest stretch that does
+    var best = [], cur = [];
+    out.forEach(function (x) { if (cur.length && x.t < cur[cur.length - 1].t) { if (cur.length > best.length) best = cur; cur = []; } cur.push(x); });
+    if (cur.length > best.length) best = cur;
+    return best;
+  }
+  // the LiveWiki extension's panel on a YouTube page, if it is open and shows the script
+  function transcriptFromLiveWikiPanel(id) {
+    if (parseId(location.href) !== id) return { ok: false, why: "다른 영상" };
+    var texts = [];
+    document.querySelectorAll("[id*=livewiki i], [class*=livewiki i]").forEach(function (n) { try { texts.push(n.innerText || ""); if (n.shadowRoot) texts.push(n.shadowRoot.textContent || ""); } catch (e) {} });
+    var best = [];
+    texts.forEach(function (t) { var sg = parseTimed(t); if (sg.length > best.length) best = sg; });
+    return best.length >= 10 ? { ok: true, source: "LiveWiki 스크립트", lang: "", name: "LiveWiki", segs: best } : { ok: false, why: "LiveWiki 없음" };
+  }
   function clockT(sec) {
     sec = Math.max(0, Math.floor(sec)); var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
     return (h ? h + ":" + String(m).padStart(2, "0") : String(m).padStart(2, "0")) + ":" + String(s).padStart(2, "0");
@@ -1006,7 +1151,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     "button{font:inherit;font-weight:700;border-radius:8px;padding:8px 12px;cursor:pointer;border:1px solid var(--ac);background:var(--ac);color:var(--ai)}",
     "button.stop{background:var(--bad);border-color:var(--bad);color:#fff}button:disabled{opacity:.5;cursor:default}",
     ".st{color:var(--mu);font-size:12px;min-height:18px}.st b{color:var(--fg)}",
-    ".res{margin:0;padding-left:16px;font-size:12px;color:var(--mu);max-height:160px;overflow:auto}.res .ok{color:var(--ok)}.res .bad{color:var(--bad)}.res .wait{color:var(--mu)}",
+    ".res{margin:0;padding-left:16px;font-size:12px;color:var(--mu);max-height:320px;overflow:auto}.res .ok{color:var(--ok)}.res .bad{color:var(--bad)}.res .wait{color:var(--mu)}",
     ".note{font-size:11px;color:var(--mu);margin:0}",
     ".seg{display:flex;border:1px solid var(--ln);border-radius:8px;overflow:hidden}.seg label{flex:1;position:relative;text-align:center;cursor:pointer}",
     ".seg input{position:absolute;opacity:0}.seg span{display:block;padding:6px 4px;font-weight:700;color:var(--mu)}.seg input:checked+span{background:var(--ac);color:var(--ai)}.seg input:focus-visible+span{outline:2px solid var(--ac)}",
@@ -1014,11 +1159,23 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   ].join("");
   // opens the digest page in a new tab (the ZIP is then picked there from the downloads folder)
   function digestLink(text) {
-    var li = h("li", { style: "list-style:none;margin:6px 0 0 -16px" });
-    var a = h("a", { href: DIGEST_URL, target: "_blank", rel: "noopener", text: text, style: "color:var(--ac);font-weight:700;text-decoration:none" });
-    li.appendChild(a); return li;
+    var li = h("li", { style: "list-style:none;margin:10px 0 0 -16px" });
+    var a = h("a", { href: DIGEST_URL, target: "_blank", rel: "noopener", text: "다음 단계: 정리 노트 만들기 →", style: "display:block;text-align:center;padding:10px;border-radius:8px;background:var(--ac);color:var(--ai);font-weight:700;text-decoration:none" });
+    li.appendChild(a);
+    li.appendChild(h("div", { text: "열린 페이지에서 방금 받은 '_정리자료.zip'을 고르면 Claude가 바로 정리해요.", style: "font-size:11px;color:var(--mu);margin-top:4px" }));
+    return li;
   }
-  function makePanel(noteText) {
+  // opens LiveWiki for one video (its address goes along and is typed in there; it is also copied, just in case)
+  function liveWikiButton(id) {
+    var b = h("button", { text: "LiveWiki로 대본 받기", style: "display:block;margin:4px 0 2px;padding:4px 8px;font-size:11px;background:var(--bg);color:var(--ac)" });
+    b.addEventListener("click", function () {
+      try { navigator.clipboard.writeText(watchUrl(id)).catch(function () {}); } catch (e) {}
+      window.open(LIVEWIKI_URL + "#lc-yt=" + id, "_blank");
+      b.textContent = "LiveWiki 열림 · 거기서 요약하면 대본이 저장돼요";
+    });
+    return b;
+  }
+  function makePanel(noteText, digText) {
     var host = document.createElement("div"); host.id = "lecture-capture-panel";
     var root = host.attachShadow({ mode: "open" });
     var style = document.createElement("style"); style.textContent = CSS; root.appendChild(style);
@@ -1030,7 +1187,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           h("label", {}, [h("input", { type: "radio", name: "lcmode", id: "modeDig", value: "digest" }), h("span", { text: "영상 정리용 자료" })])
         ]),
         h("textarea", { id: "links", rows: "4", placeholder: "유튜브 링크를 한 줄에 하나씩" }),
-        h("p", { class: "note", id: "digNote", text: "영상 정리용 자료: 대본(자막)과 장면 사진을 3초 간격·720p로 빠르게 모아 '제목_정리자료.zip'으로 저장해요. 끝나면 나오는 링크로 '영상 정리 노트'를 열고 그 ZIP을 넣으면 readray처럼 정리돼요." }),
+        h("p", { class: "note", id: "digNote", text: "영상 정리: ① 여기서 대본(유튜브 스크립트)과 장면 사진을 모아 '제목_정리자료.zip'으로 저장 → ② 끝나면 나오는 '다음 단계' 버튼으로 정리 노트 페이지를 열고 그 ZIP을 고르면 Claude가 요약·구간 정리·주요 발언·개념도·관련 자료를 만들어요. 대본은 유튜브 영상 페이지의 패널에서 링크를 넣고 시작해야 가장 잘 받아져요." }),
         h("div", { class: "r capOnly" }, [
           h("label", {}, ["속도 (동시 재생 플레이어)", h("select", { id: "workers" }, [opt("0", "자동: 가장 빠르게 (추천)"), opt("2", "2개 고정 (약 4배속)"), opt("4", "4개 고정 (약 8배속)"), opt("8", "8개 고정 (약 16배속)"), opt("12", "12개 고정 (약 24배속)"), opt("16", "16개 고정 (약 32배속)")])]),
           h("label", {}, ["화질", h("select", { id: "quality" }, [opt("max", "최고 화질 (영상에 있는 가장 높은 것)"), opt("hd2160", "4K (2160p)"), opt("hd1440", "1440p"), opt("hd1080", "1080p (선명, 추천)"), opt("hd720", "720p (가벼움, 빠름)")])])
@@ -1047,7 +1204,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("button", { id: "go", text: "캡처 시작" }),
         h("div", { class: "st", id: "st" }),
         h("ol", { class: "res", id: "res" }),
-        h("p", { class: "note", text: noteText })
+        h("p", { class: "note", id: "pnote", text: noteText })
       ])
     ]));
     var $ = function (id) { return root.getElementById(id); };
@@ -1058,6 +1215,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function applyMode() {
       var dig = prefs.mode === "digest";
       $("modeCap").checked = !dig; $("modeDig").checked = dig; $("digNote").style.display = dig ? "" : "none";
+      $("pnote").textContent = dig && digText ? digText : noteText;
       root.querySelectorAll(".capOnly").forEach(function (n) { n.style.display = dig ? "none" : ""; });
       root.querySelectorAll(".digOnly").forEach(function (n) { n.style.display = dig ? "" : "none"; });
       var go = $("go"); if (go && !go.classList.contains("stop") && /캡처 시작|정리 자료 만들기/.test(go.textContent)) go.textContent = dig ? "정리 자료 만들기" : "캡처 시작";
@@ -1085,7 +1243,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       },
       results: function (list) {
         var ol = $("res"); ol.textContent = "";
-        list.forEach(function (x) { ol.appendChild(h("li", { class: x.cls, text: x.text })); });
+        list.forEach(function (x) {
+          var li = h("li", { class: x.cls, text: x.text }); ol.appendChild(li);
+          if (x.lw) li.appendChild(liveWikiButton(x.lw));
+        });
         if (prefs.mode === "digest" && list.some(function (x) { return x.cls === "ok"; })) ol.appendChild(digestLink("정리자료 ZIP을 넣어 영상 정리 노트 만들기 →"));
       },
       applyPrefs: function () {
@@ -1221,10 +1382,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // ROLE: the work page (GitHub page) — coordinator
   // =====================================================================
   function hostRole() {
+    var preSubs = {};   // transcripts handed over by the YouTube tab, by video id
     var hasPip = !!(window.documentPictureInPicture && window.documentPictureInPicture.requestWindow);
     var FF_ANDROID = /Android/i.test(navigator.userAgent || "") && /Firefox\//i.test(navigator.userAgent || "");
-    var ui = makePanel(hasPip ? "'캡처 시작'을 누르면 작은 작업 창이 열려요. 그 창만 화면 어딘가에 떠 있으면, 이 창을 최소화하거나 다른 일을 해도 계속 진행돼요. 영상마다 ZIP이 다운로드 폴더에 저장돼요."
-      : "'캡처 시작'을 누르면 화면 위쪽에 플레이어가 나타나요. 이 화면이 보이는 동안 진행돼요. 다른 앱이나 탭으로 가면 잠시 멈췄다가 돌아오면 이어서 하고, 탭이 닫혀도 다시 열면 하던 곳부터 계속해요. 영상마다 ZIP이 다운로드 폴더에 저장돼요.");
+    var pipNote0 = hasPip; try { if (localStorage.getItem("lcNoPip")) pipNote0 = false; } catch (e) {}
+    var ui = makePanel(pipNote0 ? "'캡처 시작'을 누르면 작은 작업 창이 열려요. 그 창만 화면 어딘가에 떠 있으면, 이 창을 최소화하거나 다른 일을 해도 계속 진행돼요. 영상마다 ZIP이 다운로드 폴더에 저장돼요."
+      : "'캡처 시작'을 누르면 화면 위쪽에 플레이어가 나타나요. 이 화면이 보이는 동안 진행돼요. 다른 앱이나 탭으로 가면 잠시 멈췄다가 돌아오면 이어서 하고, 탭이 닫혀도 다시 열면 하던 곳부터 계속해요. 영상마다 ZIP이 다운로드 폴더에 저장돼요.",
+      pipNote0 ? "작은 작업 창이 열리고 거기서 진행돼요. 그 창만 떠 있으면 이 창은 최소화해도 돼요. 끝나면 이 탭이 정리 노트 페이지로 넘어가요(대본 없는 영상이 있으면 LiveWiki 버튼이 먼저 나와요)."
+      : "화면 위쪽 플레이어로 진행돼요. 이 화면이 보이는 동안 진행되고, 다른 앱에 다녀와도 이어서 해요. 끝나면 이 탭이 정리 노트 페이지로 넘어가요(대본 없는 영상이 있으면 LiveWiki 버튼이 먼저 나와요).");
     if (FF_ANDROID) ui.status("안드로이드 파이어폭스에서는 안 돼요.", "이 브라우저는 유튜브 영상 화면을 읽지 못해요(브라우저 제한). Microsoft Edge 앱에 Tampermonkey를 설치해서 써 주세요.");
     var $ = ui.$, running = false, results = [], stage = null, waiters = {}, pip = null, pipNote = null, closingPip = false;
     // a steady clock that keeps ticking while this tab is hidden or minimized
@@ -1247,13 +1412,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       ui.results(results.map(function (x) {
         var cls = x.status === "done" ? "ok" : x.status === "wait" ? "wait" : "bad";
         var t = (x.title || x.id) + " · " + (x.status === "done" ? "사진 " + x.count + "장" + (x.secs ? " (" + mins(x.secs).replace("약 ", "") + ")" : "") + (x.note ? " · " + x.note : "") : x.msg);
-        return { cls: cls, text: t };
+        return { cls: cls, text: t, lw: prefs.mode === "digest" && x.status === "done" && x.subsInfo && !/^대본 \d/.test(x.subsInfo) ? x.id : null };
       }));
     }
     refresh();
     function onMessage(e) {
       var d = e.data;
       if (!d || d.lc !== 1) return;
+      if ((e.origin === YT_ORIGIN || e.origin === YT_MOBILE) && d.type === "subs-pre" && d.id) {
+        if (d.tr) { preSubs[d.id] = d.tr; if (d.tr.ok) dbPut("sub:" + d.id, d.tr); }
+        try { e.source.postMessage({ lc: 1, type: "subs-ack", id: d.id }, e.origin); } catch (er) {}
+        return;
+      }
       if (e.origin === YT_ORIGIN && d.job && waiters[d.job]) waiters[d.job](d);
     }
     window.addEventListener("message", onMessage);
@@ -1318,11 +1488,18 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
       if (job && job.ids && job.ids.length) {
         Object.assign(prefs, job.prefs || {}); savePrefs(); ui.applyPrefs();
+        Object.keys(job.subs || {}).forEach(function (id) { var t = job.subs[id]; if (!/^[\w-]{11}$/.test(id) || !t) return; preSubs[id] = t; if (t.ok && t.segs) dbPut("sub:" + id, t); });
         pending = job.ids.filter(function (id) { return /^[\w-]{11}$/.test(id); });
         $("links").value = pending.map(watchUrl).join("\n");
         setOpen(true);
-        ui.status("'캡처 시작'을 한 번 눌러 주세요.", "작은 작업 창이 열리고 영상 " + pending.length + "개를 처리해요. 그다음엔 이 창을 최소화해도 돼요.");
-        try { $("go").focus(); } catch (e) {}
+        if (!hasPip || localStorage.getItem("lcNoPip")) {
+          // nothing that needs a click here (no work window on a phone): start right away
+          ui.status("바로 시작해요…", "영상 " + pending.length + "개");
+          setTimeout(function () { if (!running) $("go").click(); }, 800);
+        } else {
+          ui.status(prefs.mode === "digest" ? "'정리 자료 만들기'를 한 번 눌러 주세요." : "'캡처 시작'을 한 번 눌러 주세요.", "작은 작업 창이 열리고 영상 " + pending.length + "개를 처리해요(브라우저가 이 창은 클릭으로만 열게 해요). 그다음엔 이 창을 최소화해도 돼요.");
+          try { $("go").focus(); } catch (e) {}
+        }
       }
     }
     function setOpen(o) { if (!o) return; try { root_open(); } catch (e) {} }
@@ -1412,6 +1589,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // the video's captions, asked of one of its players (kept on the device so a resumed job still has them)
     function askSubs(P, id) {
       return dbGet("sub:" + id).then(function (have) {
+        if (preSubs[id] && preSubs[id].ok) return preSubs[id];
         if (have && have.ok) return have;
         return new Promise(function (res) {
           subsWait[P.key] = res; post(P, { type: "subs" });
@@ -1442,7 +1620,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         return old && old.id === id && old.status !== "wait" ? old : { id: id, status: "wait", msg: "대기" };
       });
       showResults();
-      if (!prev) { await dbDelAll("seg:"); await dbDelAll("pic:"); await dbDelAll("sub:"); }
+      if (!prev) { await dbDelAll("seg:"); await dbDelAll("pic:"); await dbDelAll("sub:"); for (var pk in preSubs) if (preSubs[pk] && preSubs[pk].ok) await dbPut("sub:" + pk, preSubs[pk]); }
       await rememberJob(ids);
       var solo = [], soloOpen = 0, noReadAll = false, pauses = 0, pausedAll = false;
       for (var i = 0; i < ids.length && !stopReq; i++) {
@@ -1493,6 +1671,21 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       await dbDel("job"); await dbDelAll("seg:"); await dbDelAll("pic:"); await dbDelAll("sub:");
       running = false; stopReq = false; refresh(); keepAwake(false);
+      // 영상 정리: everything saved and every video has its words: go on to the note page by itself
+      var allWords = results.every(function (x) { return x.status !== "done" || /^대본 \d/.test(x.subsInfo || ""); });
+      if (prefs.mode === "digest" && n && !soloOpen && !noReadAll && allWords) goDigestSoon();
+    }
+    function goDigestSoon() {
+      var left = 6, cancel = false, li = h("li", { style: "list-style:none;margin:8px 0 0 -16px;font-size:12px;color:var(--fg)" }), sp = h("span", {});
+      var b = h("button", { text: "여기 머무르기", style: "margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg);color:var(--ac)" });
+      b.addEventListener("click", function () { cancel = true; li.remove(); });
+      li.appendChild(sp); li.appendChild(b); $("res").appendChild(li);
+      (function tick() {
+        if (cancel) return;
+        if (left <= 0) { location.href = DIGEST_URL; return; }
+        sp.textContent = left + "초 뒤 정리 노트 페이지로 넘어가요. 거기서 방금 받은 ZIP을 고르기만 하면 돼요."; left--;
+        setTimeout(tick, 1000);
+      })();
     }
 
     // One video. Pieces of it go to several players at once.
@@ -1862,9 +2055,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       ui.status(label, "ZIP 만드는 중…");
       var trn = res.subsP ? await Promise.race([res.subsP, bsleep(30000).then(function () { return null; })]) : null;
-      if (!trn && prefs.subs !== false) trn = await dbGet("sub:" + id);
+      if (!(trn && trn.ok) && prefs.subs !== false) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
+      if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
       await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null);
-      res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" : "";
+      res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" + (trn && trn.why ? "(" + String(trn.why).slice(0, 60) + ")" : "") : "";
       if (res.subsInfo) res.note = [res.note, res.subsInfo].filter(Boolean).join(" · ");
       res.status = "done"; res.count = scenes.length; res.secs = (Date.now() - began) / 1000;
       if (sessionCap && !backoffs && !undone) sessionCap += 2;
@@ -2012,7 +2206,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function youtubeRole() {
     var solo = location.hash.match(/^#lc-solo=(.+)$/);
     if (solo) return soloRole(solo[1]);
-    var ui = makePanel("'캡처 시작'을 누르면 작업 탭(GitHub 페이지)이 열리고 거기서 진행돼요. 그 탭을 화면에 띄워 두세요. 영상마다 ZIP이 다운로드 폴더에 저장돼요.");
+    var ui = makePanel("'캡처 시작'을 누르면 작업 탭(GitHub 페이지)이 열리고 거기서 진행돼요. 그 탭을 화면에 띄워 두세요. 영상마다 ZIP이 다운로드 폴더에 저장돼요.",
+      "'정리 자료 만들기'를 누르면 대본을 챙겨 작업 탭(GitHub 페이지)을 열어요. 폰은 바로 시작하고, PC는 거기서 한 번 더 누르면 돼요. 끝나면 정리 노트 페이지로 넘어가요.");
     var $ = ui.$;
     var id = parseId(location.href); if (id) $("links").value = watchUrl(id);
     // YouTube changes pages without reloading: keep the box in step with the video being watched
@@ -2033,9 +2228,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("label", {}, ["받아쓰기 속도", sel("trRate", [["1", "1배 (가장 정확)"], ["1.25", "1.25배 (추천)"], ["1.5", "1.5배"]])])]),
       h("div", { class: "st", id: "trSt" }),
       h("a", { href: DIGEST_URL, target: "_blank", rel: "noopener", text: "영상 정리 노트 열기 →", style: "color:var(--ac);font-weight:700;text-decoration:none;font-size:12px" }),
-      h("p", { class: "note", text: "자막(자동 자막 포함)이 있으면 바로 받아요. 자막이 없는 영상은 '소리로 받아쓰기'로 영상을 재생하며 받아써요(PC 크롬, 영상 길이를 속도로 나눈 만큼 걸림). 받은 대본은 '영상 정리' 페이지나 Claude 채팅에 캡처 ZIP과 함께 넣으면 돼요." })
+      h("p", { class: "note", text: "이 영상 하나의 대본만 '제목_대본.txt'로 받아요(정리 자료 만들기에는 대본이 자동으로 들어가요). 자막이 없는 영상은 PC 크롬의 '소리로 받아쓰기'나 아래 LiveWiki로 받으세요." }),
+      h("div", { id: "trLw" })
     ]);
     $("bd").appendChild(trBox); ui.applyMode();
+    (function lwBtn() { var b = $("trLw"); b.textContent = ""; var vid = parseId(location.href); if (vid) b.appendChild(liveWikiButton(vid)); })();
+    setInterval(function () { var b = $("trLw"), vid = parseId(location.href); if (vid && b.dataset.v !== vid) { b.dataset.v = vid; b.textContent = ""; b.appendChild(liveWikiButton(vid)); } }, 1500);
     $("trRate").value = "1.25";
     function trSt(t) { $("trSt").textContent = t; }
     function curMeta() {
@@ -2051,11 +2249,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $("trGet").addEventListener("click", async function () {
       var m = curMeta(); if (!m.mp || !m.id) { trSt("영상 페이지에서 눌러 주세요."); return; }
       $("trGet").disabled = true; trSt("자막 찾는 중…");
-      var tr = null; try { tr = await getTranscript(m.mp); } catch (e) { tr = { ok: false, why: String(e && e.message || e) }; }
+      var tr = null; try { tr = await watchTranscript(m.id); } catch (e) { tr = { ok: false, why: String(e && e.message || e) }; }
       $("trGet").disabled = false;
       if (tr && tr.ok) { saveTranscript(m, tr); trSt("대본 " + tr.segs.length + "줄을 저장했어요 (" + tr.source + ", " + tr.name + ")."); return; }
-      trSt(tr && tr.why === "none" ? "이 영상에는 자막(자동 자막 포함)이 없어요. " + (canListen() ? "'소리로 받아쓰기'를 눌러 주세요." : "PC 크롬에서 '소리로 받아쓰기'를 쓰세요.")
-        : "자막을 받지 못했어요" + (tr && tr.why ? " (" + tr.why + ")" : "") + ". 잠시 뒤 다시 누르거나 '소리로 받아쓰기'를 쓰세요.");
+      trSt("대본을 받지 못했어요" + (tr && tr.why ? " (" + tr.why + ")" : "") + ". " + (canListen() ? "자막이 없는 영상이면 '소리로 받아쓰기'를 눌러 주세요." : "자막이 없는 영상이면 PC 크롬의 '소리로 받아쓰기'를 쓰거나, 정리 노트에서 장면 사진만으로 정리하세요."));
     });
     $("trListen").addEventListener("click", async function () {
       if (listening) { stopListen = true; return; }
@@ -2075,15 +2272,48 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (tr.complete) { try { localStorage.removeItem(listenKey(m.id)); } catch (e) {} trSt("끝까지 받아써서 " + tr.segs.length + "줄을 저장했어요."); }
       else trSt("여기까지 " + tr.segs.length + "줄을 저장했어요. 다시 누르면 이어서 받아써요.");
     });
-    $("go").addEventListener("click", function () {
+    // Transcripts are read here, on YouTube's own site (the work tab only has embedded players, which YouTube keeps
+    // captions from). They start loading as soon as links are pasted, so most are ready when 시작 is pressed and
+    // travel with the job itself; any still loading follow by message. (A phone may pause this tab once the work
+    // tab is in front, so the more that travel with the job, the better.)
+    var trCache = {};
+    function prefetch(ids) {
+      ids.slice(0, 20).forEach(function (id) {
+        if (trCache[id]) return;
+        var c = trCache[id] = { v: null };
+        c.p = watchTranscript(id).catch(function (e) { return { ok: false, why: String(e && e.message || e) }; }).then(function (r) { c.v = r; return r; });
+      });
+    }
+    var pfT = 0;
+    $("links").addEventListener("input", function () { clearTimeout(pfT); pfT = setTimeout(function () { prefetch(parseLinks($("links").value).ids); }, 600); });
+    $("go").addEventListener("click", async function () {
       ui.readPrefs(); savePrefs();
       var p = parseLinks($("links").value);
       if (!p.ids.length) { ui.status("유튜브 링크를 넣어 주세요.", p.bad ? "알아볼 수 없는 줄 " + p.bad + "개" : ""); return; }
       try { var own = document.querySelector("#movie_player video"); if (own) own.pause(); } catch (e) {}
-      var w = window.open(HOST_URL + "#lc=" + encodeURIComponent(JSON.stringify({ ids: p.ids, prefs: pickPrefs() })), "_blank");
+      // wait a little for transcripts still loading (under 3 s, so the browser still counts the tap for opening a tab)
+      prefetch(p.ids);
+      var wait = p.ids.filter(function (id) { return trCache[id] && !trCache[id].v; });
+      if (wait.length) { ui.status("대본 확인 중…", "곧 작업 탭이 열려요."); await Promise.race([Promise.all(wait.map(function (id) { return trCache[id].p; })), sleep(2800)]); }
+      var subs = {}, size = 0;
+      p.ids.forEach(function (id) { var v = trCache[id] && trCache[id].v; if (!v) return; var n = JSON.stringify(v).length; if (size + n < 300000) { subs[id] = v; size += n; } });
+      var w = window.open(HOST_URL + "#lc=" + encodeURIComponent(JSON.stringify({ ids: p.ids, prefs: pickPrefs(), subs: subs })), "_blank");
       if (!w) { ui.status("새 탭이 차단됐어요.", "주소창 오른쪽의 팝업 차단 아이콘을 눌러 youtube.com의 팝업을 허용하고 다시 눌러 주세요."); return; }
-      ui.status("작업 탭에서 시작했어요.", "영상 " + p.ids.length + "개 · 진행 상황은 새로 열린 탭의 패널에 나와요.");
+      var got = p.ids.filter(function (id) { return subs[id] && subs[id].ok; }).length;
+      ui.status("작업 탭에서 시작했어요.", "영상 " + p.ids.length + "개 · 대본 " + got + "개 함께 넘김 · 진행 상황은 새로 열린 탭의 패널에 나와요.");
+      handOver(w, p.ids.filter(function (id) { return !subs[id]; }));   // the rest, when ready
     });
+    async function handOver(w, ids) {
+      for (var i = 0; i < ids.length; i++) {
+        prefetch([ids[i]]);
+        var tr = await trCache[ids[i]].p;
+        ui.status("작업 탭에서 시작했어요.", "대본 " + (i + 1) + "/" + ids.length + ": " + (tr.ok ? tr.segs.length + "줄 넘김" : "못 찾음(" + tr.why + ")"));
+        var acked = false, onAck = function (e) { if (e.origin === HOST_ORIGIN && e.data && e.data.lc === 1 && e.data.type === "subs-ack" && e.data.id === ids[i]) acked = true; };
+        window.addEventListener("message", onAck);
+        for (var k = 0; k < 40 && !acked; k++) { try { w.postMessage({ lc: 1, type: "subs-pre", id: ids[i], tr: tr }, HOST_ORIGIN); } catch (e) {} await sleep(500); }
+        window.removeEventListener("message", onAck);
+      }
+    }
   }
 
 
@@ -2200,7 +2430,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var scenes = finalPass(G, [C]);
       if (!scenes.length) return report({ ok: false, title: title, msg: "찍힌 장면이 없어요" });
       ui.status("저장 중", "대본 찾는 중…");
-      var trn = prefs.subs !== false ? await getTranscript(mp).catch(function () { return null; }) : null;
+      var trn = prefs.subs !== false ? await watchTranscript(id).catch(function () { return null; }) : null;
       ui.status("저장 중", "ZIP 만드는 중…");
       await saveZip(title + (stopReq ? "_중단" : ""), scenes, null, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null);
       ui.status("끝났어요.", "사진 " + scenes.length + "장을 저장했어요.");
@@ -2208,9 +2438,88 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     })();
   }
 
+  // =====================================================================
+  // ROLE: livewiki.com — its script (written even for videos without captions) saved as "제목_대본.txt"
+  // =====================================================================
+  function livewikiRole() {
+    var SKEY2 = "lc-lw-yt", m = /#lc-yt=([\w-]{11})/.exec(location.hash);
+    if (m) { try { sessionStorage.setItem(SKEY2, m[1]); history.replaceState(null, "", location.pathname + location.search); } catch (e) {} }
+    var want = null; try { want = sessionStorage.getItem(SKEY2); } catch (e) {}
+    var host = document.createElement("div"), root = host.attachShadow({ mode: "open" }), st = document.createElement("style");
+    st.textContent = CSS + ".p{top:auto;bottom:16px;width:280px}";
+    root.appendChild(st);
+    var box = h("div", { class: "p" }, [h("div", { class: "h" }, [h("span", { text: "강의 캡처 · LiveWiki 대본" })]),
+      h("div", { class: "b" }, [h("div", { class: "st", id: "lwSt", text: "LiveWiki에서 영상을 요약하면 스크립트를 대본 파일로 저장해요." }), h("button", { id: "lwSave", text: "지금 대본 저장" })])]);
+    root.appendChild(box);
+    (function mount() { if (!host.isConnected && document.body) document.body.appendChild(host); setTimeout(mount, 2000); })();
+    function say(t) { root.getElementById("lwSt").textContent = t; }
+    function visible(el) { return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)); }
+    // 1) the address of the video goes into LiveWiki's box (the button there is left to the user)
+    var filled = false;
+    function fill() {
+      if (filled || !want) return;
+      var inp = Array.prototype.slice.call(document.querySelectorAll("input, textarea")).filter(function (x) {
+        return visible(x) && !x.disabled && (x.type === "url" || /youtube|유튜브|링크|url|주소|붙여/i.test((x.placeholder || "") + " " + (x.getAttribute("aria-label") || "") + " " + (x.name || "")));
+      })[0];
+      if (!inp) return;
+      var proto = inp.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      try { Object.getOwnPropertyDescriptor(proto, "value").set.call(inp, watchUrl(want)); } catch (e) { inp.value = watchUrl(want); }
+      inp.dispatchEvent(new Event("input", { bubbles: true })); inp.dispatchEvent(new Event("change", { bubbles: true }));
+      try { inp.focus(); } catch (e) {}
+      filled = true; say("유튜브 주소를 넣어 뒀어요. LiveWiki의 요약 버튼을 눌러 주세요. 요약이 나오면 대본을 저장해요.");
+    }
+    function videoId() {
+      var id = parseId(location.href);
+      if (!id) { var a = document.querySelector("a[href*='youtube.com/watch'], a[href*='youtu.be/'], iframe[src*='youtube.com/embed'], iframe[src*='youtube-nocookie.com/embed']"); if (a) id = parseId(a.href || a.src); }
+      if (!id) { var im = document.querySelector("img[src*='ytimg.com/vi/']"); var mm = im && /\/vi\/([\w-]{11})\//.exec(im.src); if (mm) id = mm[1]; }
+      return id || want;
+    }
+    function title() {
+      var t = document.querySelector("h1"), s = t && t.textContent.trim();
+      return s || document.title.replace(/\s*[|·-]\s*LiveWiki.*$/i, "").trim() || "LiveWiki";
+    }
+    // 2) its "스크립트" tab, opened once per video
+    var clickedFor = "";
+    function openScript(key) {
+      if (clickedFor === key) return;
+      var tabs = Array.prototype.slice.call(document.querySelectorAll("button, [role=tab], a, li, div, span")).filter(function (x) {
+        return visible(x) && x.children.length <= 2 && /^(스크립트|script|transcript)$/i.test((x.textContent || "").trim());
+      });
+      if (tabs.length) { clickedFor = key; try { tabs[0].click(); } catch (e) {} }
+    }
+    function readScript() {
+      var txt = ""; try { txt = document.body.innerText; } catch (e) {}
+      return parseTimed(txt);
+    }
+    function save(segs, id, auto) {
+      var head = ["제목: " + title(), id ? "주소: " + watchUrl(id) : "", "대본: LiveWiki 스크립트", "-----"].filter(Boolean);
+      var body = head.concat(segs.map(function (x) { return "[" + clockT(x.t) + "] " + x.text; })).join("\n") + "\n";
+      downloadBlob(new Blob([body], { type: "text/plain;charset=utf-8" }), safeName(title()) + "_대본.txt");
+      try { sessionStorage.setItem("lc-lw-saved:" + (id || title()), String(segs.length)); } catch (e) {}
+      say((auto ? "대본을 저장했어요: " : "저장했어요: ") + segs.length + "줄. 정리 노트 페이지에서 정리자료 ZIP과 이 파일을 함께 고르세요.");
+    }
+    root.getElementById("lwSave").addEventListener("click", function () {
+      var sg = readScript(); if (sg.length < 3) { say("화면에서 스크립트를 찾지 못했어요. LiveWiki의 '스크립트' 탭을 열고 다시 눌러 주세요."); return; }
+      save(sg, videoId(), false);
+    });
+    // 3) once the script stays the same for a few seconds, it is saved (once per video)
+    var lastN = -1, sameFor = 0;
+    setInterval(function () {
+      fill();
+      var id = videoId(), key = id || location.pathname;
+      if (readScript().length >= 3) openScript(key);   // a summary is up: switch to its script (not the timeline) first
+      var sg = readScript();
+      if (sg.length < 10) { lastN = sg.length; sameFor = 0; return; }
+      if (sg.length === lastN) sameFor++; else { sameFor = 0; lastN = sg.length; say("스크립트 읽는 중… " + sg.length + "줄"); }
+      var done = null; try { done = sessionStorage.getItem("lc-lw-saved:" + (id || title())); } catch (e) {}
+      if (sameFor >= 3 && !done) save(sg, id, true);
+    }, 1500);
+  }
+
   // ---------- pick the role ----------
   var inFrame = false; try { inFrame = window.top !== window; } catch (e) { inFrame = true; }
   if (location.origin === YT_ORIGIN && /^\/embed\//.test(location.pathname)) { if (inFrame) workerRole(); }
   else if (location.origin === YT_ORIGIN || location.origin === YT_MOBILE) { if (!inFrame) youtubeRole(); }
   else if (location.origin === HOST_ORIGIN) { if (!inFrame) hostRole(); }
+  else if (/(^|\.)livewiki\.com$/.test(location.hostname)) { if (!inFrame) livewikiRole(); }
 })();
