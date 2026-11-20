@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.22.3
+// @version      1.22.4
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -42,7 +42,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
   // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
-  try { document.documentElement.setAttribute("data-lc-cap", "1.22.3"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
+  try { document.documentElement.setAttribute("data-lc-cap", "1.22.4"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -272,6 +272,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   function enterMode() { if (prefs.mode === "digest" && !userSet) { userSet = {}; Object.keys(DIGEST_SET).forEach(function (k) { userSet[k] = prefs[k]; }); Object.assign(prefs, DIGEST_SET); } }
   function leaveMode() { if (userSet) { Object.assign(prefs, userSet); userSet = null; } }
   function savePrefs() { save(PKEY, Object.assign({}, prefs, userSet || {})); }
+  // 영상 정리: once the package reached the note page, a copy in the downloads folder is optional. On a phone the browser
+  // asks about every download (and the work stops behind that question), so there it is off unless switched on.
+  var IS_MOBILE = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || "");
+  function keepZipOn() { return prefs.keepZip != null ? !!prefs.keepZip : !IS_MOBILE; }
   var EVERY_OPTS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
   function fixEvery(x) { x = Number(x) || 1; var best = 1; EVERY_OPTS.forEach(function (o) { if (Math.abs(o - x) < Math.abs(best - x) - 1e-9) best = o; }); return best; }
   prefs.every = fixEvery(prefs.every);
@@ -1193,25 +1197,30 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
     var blob = zipStore(full);
     if (DBG) console.log("[lc] zip " + full.length + " files, " + Math.round(blob.size / 1e6) + " MB in " + (Date.now() - t0) + " ms");
-    // the download link is clicked inside a hidden frame: Firefox closes the work window when this page itself "navigates" to a download
-    var url = URL.createObjectURL(blob), name = safeName(title) + (prefs.mode === "digest" ? "_정리자료.zip" : "_캡처.zip"), f = null;
-    try {
-      f = document.createElement("iframe"); f.style.display = "none"; document.body.appendChild(f);
-      var fd = f.contentDocument, a = fd.createElement("a"); a.href = url; a.download = name; fd.body.appendChild(a); a.click();
-      setTimeout(function () { f.remove(); }, 60000);
-    } catch (e) {
-      if (f) f.remove();
-      var a2 = document.createElement("a"); a2.href = url; a2.download = name; document.body.appendChild(a2); a2.click(); a2.remove();
-    }
-    var handed = false;
+    var name = safeName(title) + (prefs.mode === "digest" ? "_정리자료.zip" : "_캡처.zip"), handed = false;
     if (lite) {
       say("정리 노트로 보내는 중…");
       // nothing needed shrinking: the very same ZIP goes to the note page (no second ZIP)
       try { handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, liteSame ? blob : zipStore(lite)); } catch (e) { handed = false; }
     }
+    // the file itself: always for plain capture and whenever the hand-over did not work; for 영상 정리 only if wanted
+    var saved = !lite || !handed || keepZipOn();
+    if (saved) {
+      // the download link is clicked inside a hidden frame: Firefox closes the work window when this page itself "navigates" to a download
+      var url = URL.createObjectURL(blob), f = null;
+      try {
+        f = document.createElement("iframe"); f.style.display = "none"; document.body.appendChild(f);
+        var fd = f.contentDocument, a = fd.createElement("a"); a.href = url; a.download = name; fd.body.appendChild(a); a.click();
+        setTimeout(function () { f.remove(); }, 60000);
+      } catch (e) {
+        if (f) f.remove();
+        var a2 = document.createElement("a"); a2.href = url; a2.download = name; document.body.appendChild(a2); a2.click(); a2.remove();
+      }
+      setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
+    }
     full = null; lite = null;
     await sleep(waitMs == null ? 2500 : waitMs);
-    return { handed: handed, why: handed ? "" : bridgeWhy };
+    return { handed: handed, saved: saved, why: handed ? "" : bridgeWhy };
   }
 
   // ---------- panel (shadow DOM, no innerHTML: YouTube enforces Trusted Types) ----------
@@ -1288,6 +1297,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "caps" }), h("span", { text: "자막이 바뀌어도 새로 찍기 (화면과 자막이 둘 다 같을 때만 건너뜀, 추천)" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "merge" }), h("span", { text: "내용이 덧붙기만 하면 완성된 한 장만 남기기" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "subs" }), h("span", { text: "대본(자막)도 ZIP에 함께 넣기" })]),
+        h("label", { class: "c digOnly" }, [h("input", { type: "checkbox", id: "keepZip" }), h("span", { text: "정리 자료 ZIP도 다운로드 폴더에 저장 (정리 노트로 자동 전달되면 없어도 돼요. 전달이 안 되면 늘 저장해요)" })]),
         h("button", { id: "go", text: "캡처 시작" }),
         h("div", { class: "st", id: "st" }),
         h("ol", { class: "res", id: "res" }),
@@ -1299,7 +1309,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     (function mount() { if (!host.isConnected && document.body) document.body.appendChild(host); setTimeout(mount, 2000); })();
     $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
     $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
-    $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false;
+    $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
     function applyMode() {
       var dig = prefs.mode === "digest";
       $("modeCap").checked = !dig; $("modeDig").checked = dig; $("digNote").style.display = dig ? "" : "none";
@@ -1313,13 +1323,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function setOpen(o) { prefs.open = o; $("bd").style.display = o ? "" : "none"; $("fold").textContent = o ? "▾" : "▸"; savePrefs(); }
     setOpen(prefs.open !== false);
     $("hd").addEventListener("click", function () { setOpen(!prefs.open); });
-    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs"].forEach(function (id) {
+    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip"].forEach(function (id) {
       $(id).addEventListener("change", function () { readPrefs(); savePrefs(); });
     });
     function readPrefs() {
       prefs.workers = Number($("workers").value); prefs.quality = $("quality").value; prefs.minPx = Number($("sens").value);
       prefs.ignoreMoving = $("moving").checked; prefs.merge = $("merge").checked; prefs.ignoreCaptions = !$("caps").checked;
-      prefs.every = fixEvery($("every").value); prefs.dedup = $("dedup").checked; prefs.subs = $("subs").checked;
+      prefs.every = fixEvery($("every").value); prefs.dedup = $("dedup").checked; prefs.subs = $("subs").checked; prefs.keepZip = $("keepZip").checked;
     }
     return {
       $: $, readPrefs: readPrefs, applyMode: applyMode, root: root,
@@ -1340,12 +1350,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       applyPrefs: function () {
         $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
         $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
-        $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false;
+        $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
         applyMode();
       }
     };
   }
-  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode }; }
+  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip }; }
   function jobPrefs() { return Object.assign(pickPrefs(), userSet || {}); }
 
   // =====================================================================
@@ -2151,9 +2161,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (!(trn && trn.ok) && prefs.subs !== false) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
       if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
       var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null, function (t) { ui.status(label, t); });
-      res.handed = !!(sv && sv.handed); res.handWhy = sv && sv.why || "";
+      res.handed = !!(sv && sv.handed); res.handWhy = sv && sv.why || ""; res.zipSaved = !sv || sv.saved !== false;
       res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" + (trn && trn.why ? "(" + String(trn.why).slice(0, 60) + ")" : "") : "";
-      if (res.subsInfo) res.note = [res.note, res.subsInfo, res.handed ? "정리 노트로 보냄" : prefs.mode === "digest" ? "정리 노트 자동 전달 안 됨(" + (res.handWhy || "?") + ")" : ""].filter(Boolean).join(" · ");
+      if (res.subsInfo) res.note = [res.note, res.subsInfo, res.handed ? "정리 노트로 보냄" + (res.zipSaved ? "" : "(ZIP 파일은 저장 안 함)") : prefs.mode === "digest" ? "정리 노트 자동 전달 안 됨(" + (res.handWhy || "?") + ")" : ""].filter(Boolean).join(" · ");
       res.status = "done"; res.count = scenes.length; res.secs = (Date.now() - began) / 1000;
       if (sessionCap && !backoffs && !undone) sessionCap += 2;
       if (note) { res.status = "bad"; res.msg = "사진 " + scenes.length + "장 저장" + note + " (그 부분만 빠졌어요)"; }
