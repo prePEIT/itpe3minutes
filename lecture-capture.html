@@ -83,6 +83,12 @@ header p { margin: 4px 0 0; color: var(--muted); }
 .row { display: flex; flex-direction: column; gap: 8px; }
 .row > label, .row > .lbl { font-weight: 600; font-size: 0.95rem; }
 .hint { color: var(--muted); font-size: 0.85rem; margin: 0; }
+.lchelp { border-color: var(--mark); border-left-width: 4px; gap: 10px; }
+.lchelp h3 { margin: 0; font-size: 1rem; }
+.lchelp p, .lchelp ol { margin: 0; }
+.lchelp ol { padding-left: 20px; display: grid; gap: 6px; }
+.lchelp a { color: var(--accent); word-break: break-all; }
+.lchelp-act { display: flex; flex-wrap: wrap; gap: 8px; }
 .chips { display: flex; flex-direction: column; gap: 12px; }
 .chipgrp { display: flex; flex-wrap: wrap; gap: 8px; }
 .chiplbl { flex-basis: 100%; font-size: 13px; color: var(--muted, #5b6472); }
@@ -192,6 +198,18 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     <h1>강의 화면 캡처</h1>
     <p>강의 영상을 훑어서, 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상은 이 기기 밖으로 나가지 않아요.</p>
   </header>
+
+  <section class="panel lchelp" id="lcHelp" hidden aria-labelledby="h-lchelp">
+    <h3 id="h-lchelp">유튜브 링크 칸이 이 기기에서 안 떠요</h3>
+    <p id="lcWhy"></p>
+    <ol id="lcSteps"></ol>
+    <p class="hint" id="lcFound"></p>
+    <div class="lchelp-act">
+      <button type="button" class="btn ghost" id="lcClear">이 기기의 캡처 기록 지우고 다시 열기</button>
+      <button type="button" class="btn ghost" id="lcCopy">이 주소 복사</button>
+    </div>
+    <p class="hint">'캡처 기록 지우기'는 이 페이지에 남은 유튜브 캡처 설정과 끝나지 않은 작업만 지워요. 만든 ZIP·정리 노트·영상 파일은 그대로예요.</p>
+  </section>
 
   <section class="panel" aria-labelledby="h-pick">
     <h2 id="h-pick">1. 영상 고르기</h2>
@@ -376,6 +394,74 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     <button type="button" class="btn" id="go" disabled>캡처 시작</button>
   </div>
 </div>
+
+<script>
+// Is the YouTube panel (added by the "강의 화면 캡처" userscript/extension) on this page? If not, say why and what to do.
+(function () {
+  var inFrame = false; try { inFrame = window.top !== window; } catch (e) { inFrame = true; }
+  if (inFrame || /^#lc-relay=/.test(location.hash) || /lc-stage=/.test(location.search)) return;
+  // the scripts only run on ".../lecture-capture.html": an address without ".html" shows this page but no panel
+  if (/\/lecture-capture$/.test(location.pathname)) { location.replace(location.pathname + ".html" + location.search + location.hash); return; }
+  var CAP = "https://raw.githubusercontent.com/prePEIT/itpe3minutes/main/lecture-capture.user.js";
+  var BRG = "https://raw.githubusercontent.com/prePEIT/itpe3minutes/main/lecture-bridge.user.js";
+  var bridge = null;
+  window.addEventListener("message", function (e) { var d = e.data; if (d && d.lcb === 1 && d.dir === "out" && d.op === "hello") bridge = d; });
+  function ping() { try { window.postMessage({ lcb: 1, dir: "in", op: "ping" }, location.origin); } catch (e) {} }
+  [500, 2000, 4500].forEach(function (t) { setTimeout(ping, t); });
+  function panel() { return document.getElementById("lecture-capture-panel"); }
+  function el(id) { return document.getElementById(id); }
+  function li(parts) {
+    var x = document.createElement("li");
+    parts.forEach(function (p) { if (typeof p === "string") x.appendChild(document.createTextNode(p)); else { var a = document.createElement("a"); a.href = p[1]; a.textContent = p[0]; a.target = "_blank"; a.rel = "noopener"; x.appendChild(a); } });
+    return x;
+  }
+  function check() {
+    var box = el("lcHelp"); if (!box) return;
+    if (panel()) { box.hidden = true; return; }
+    var root = document.documentElement, cap = root.getAttribute("data-lc-cap"), stage = root.getAttribute("data-lc-stage"), err = root.getAttribute("data-lc-err");
+    var app = false; try { app = matchMedia("(display-mode: standalone)").matches || matchMedia("(display-mode: fullscreen)").matches || matchMedia("(display-mode: minimal-ui)").matches || navigator.standalone === true; } catch (e) {}
+    var why = el("lcWhy"), ol = el("lcSteps"); ol.textContent = "";
+    if (app) {
+      why.textContent = "이 화면은 홈 화면에 추가한 앱(바로가기) 창으로 열려 있어요. 이런 창에서는 Tampermonkey 같은 확장 프로그램이 돌지 않아요.";
+      ol.appendChild(li(["Edge 앱을 직접 열고, 주소창에 이 페이지 주소를 넣어 열어 주세요('이 주소 복사' 버튼)."]));
+      ol.appendChild(li(["홈 화면 바로가기는 지우고, Edge 즐겨찾기로 여는 걸 추천해요."]));
+    } else if (cap && (err || stage !== "ok")) {
+      why.textContent = "'강의 화면 캡처' 스크립트(" + cap + ")가 시작하다 멈췄어요" + (err ? ": " + err.split("\n")[0] : " (준비 단계: " + stage + ")") + ".";
+      ol.appendChild(li(["아래 '캡처 기록 지우고 다시 열기'를 눌러 보세요. 이 기기에 남은 설정이나 작업 기록 때문이면 이걸로 풀려요."]));
+      ol.appendChild(li(["그래도 같으면 이 화면을 캡처해서 보내 주세요(위 문장에 멈춘 이유가 적혀 있어요)."]));
+    } else if (bridge) {
+      why.textContent = "Tampermonkey는 이 페이지에서 돌고 있어요('강의 캡처 연결'이 응답함). 그런데 '강의 화면 캡처' 스크립트가 이 페이지에서 시작하지 않았어요.";
+      ol.appendChild(li(["Edge 메뉴 → 확장 → Tampermonkey → 대시보드에서 '강의 화면 캡처 (유튜브)'가 있는지, 스위치가 켜져 있는지 봐요."]));
+      ol.appendChild(li(["없거나 버전이 1.22.2보다 낮으면 여기를 눌러 설치·업데이트해요: ", ["강의 화면 캡처 설치", CAP]]));
+      ol.appendChild(li(["그 스크립트를 열어 '설정' 탭의 '사용자 제외(@exclude)'나 '사용자 일치'에 이상한 주소가 들어가 있지 않은지 봐요."]));
+    } else {
+      why.textContent = "이 페이지에서 Tampermonkey 스크립트가 하나도 돌지 않았어요(두 스크립트 모두 응답 없음). 다른 기기에서는 잘 된다면, 이 기기의 Tampermonkey 안에 예전 버전(1.21)의 '강의 캡처 연결'이 쌓아 둔 큰 자료(사진 묶음)가 남아 스크립트를 못 띄우는 것으로 보여요. 스크립트를 지웠다 다시 깔아도 그 자료는 Tampermonkey 안(휴지통·저장소)에 남을 수 있어요.";
+      ol.appendChild(li(["Edge 메뉴 → 확장에서 Tampermonkey가 켜져 있는지 확인해요."]));
+      ol.appendChild(li(["Tampermonkey 대시보드 → '강의 캡처 연결'을 열고 '저장소(Storage)' 탭에 긴 내용이 있으면 전부 지우고 { } 만 남긴 뒤 저장해요. (저장소 탭이 안 보이면 설정 → 일반 → 설정 모드를 '고급'으로.) 휴지통에 예전 스크립트가 있으면 휴지통도 비워요."]));
+      ol.appendChild(li(["가장 확실한 방법: Edge 메뉴 → 확장에서 Tampermonkey를 제거하고 다시 추가해요(Tampermonkey 안의 자료가 모두 지워져요). 그다음 두 스크립트를 다시 설치해요: ", ["강의 화면 캡처", CAP], " · ", ["강의 캡처 연결", BRG]]));
+      ol.appendChild(li(["Edge를 완전히 닫았다(최근 앱에서 밀어서 종료) 다시 열고 이 페이지를 새로 열어요."]));
+    }
+    el("lcFound").textContent = "확인한 것: 캡처 스크립트 " + (cap ? cap + " 시작함" : "시작 흔적 없음") + " · 연결 스크립트 " + (bridge ? "응답 있음" : "응답 없음") + (app ? " · 홈 화면 앱 창" : "") + " · " + location.href.split("#")[0];
+    box.hidden = false;
+  }
+  function start() {
+    el("lcCopy").addEventListener("click", function () {
+      var u = location.origin + location.pathname;
+      (navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(u) : Promise.reject()).then(function () { el("lcCopy").textContent = "복사했어요"; }, function () { prompt("이 주소를 복사하세요", u); });
+    });
+    el("lcClear").addEventListener("click", function () {
+      var b = el("lcClear"); b.disabled = true; b.textContent = "지우는 중…";
+      try { Object.keys(localStorage).forEach(function (k) { if (/^lecture-capture-(ext-prefs|shots|safe)/.test(k) || k === "lcNoPip") localStorage.removeItem(k); }); } catch (e) {}
+      var done = false; function go() { if (done) return; done = true; location.reload(); }
+      try { var rq = indexedDB.deleteDatabase("lecture-capture"); rq.onsuccess = rq.onerror = rq.onblocked = function () { setTimeout(go, 300); }; } catch (e) { go(); }
+      setTimeout(go, 3000);
+    });
+    setTimeout(check, 7000); setTimeout(check, 15000);
+    setInterval(function () { var box = el("lcHelp"); if (box && !box.hidden && panel()) box.hidden = true; }, 2000);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
+})();
+</script>
 
 <script>
 (function () {

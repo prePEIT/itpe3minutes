@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.22.0
+// @version      1.22.2
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -41,6 +41,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   "use strict";
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
+  // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
+  try { document.documentElement.setAttribute("data-lc-cap", "1.22.2"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -1236,7 +1238,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           h("label", {}, [h("input", { type: "radio", name: "lcmode", id: "modeDig", value: "digest" }), h("span", { text: "영상 정리용 자료" })])
         ]),
         h("textarea", { id: "links", rows: "4", placeholder: "유튜브 링크를 한 줄에 하나씩" }),
-        h("p", { class: "note", id: "digNote", text: "영상 정리: ① 여기서 대본(유튜브 스크립트)과 장면 사진을 모아 '제목_정리자료.zip'으로 저장 → ② 끝나면 나오는 '다음 단계' 버튼으로 정리 노트 페이지를 열고 그 ZIP을 고르면 Claude가 요약·구간 정리·주요 발언·개념도·관련 자료를 만들어요. 대본은 유튜브 영상 페이지의 패널에서 링크를 넣고 시작해야 가장 잘 받아져요." }),
+        h("p", { class: "note", id: "digNote", text: "영상 정리: 여기서 대본(유튜브 스크립트)과 장면 사진을 모아 '제목_정리자료.zip'으로 저장하고, '강의 캡처 연결' 스크립트가 있으면 정리 노트로 자동으로 넘겨요. 끝나면 정리 노트 페이지로 넘어가서 Claude가 요약·구간 정리·답안 카드를 만들고 보관해요. 대본은 유튜브 영상 페이지의 패널에서 링크를 넣고 시작해야 가장 잘 받아져요." }),
         h("div", { class: "r capOnly" }, [
           h("label", {}, ["속도 (동시 재생 플레이어)", h("select", { id: "workers" }, [opt("0", "자동: 가장 빠르게 (추천)"), opt("2", "2개 고정 (약 4배속)"), opt("4", "4개 고정 (약 8배속)"), opt("8", "8개 고정 (약 16배속)"), opt("12", "12개 고정 (약 24배속)"), opt("16", "16개 고정 (약 32배속)")])]),
           h("label", {}, ["화질", h("select", { id: "quality" }, [opt("max", "최고 화질 (영상에 있는 가장 높은 것)"), opt("hd2160", "4K (2160p)"), opt("hd1440", "1440p"), opt("hd1080", "1080p (선명, 추천)"), opt("hd720", "720p (가벼움, 빠름)")])])
@@ -1602,7 +1604,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function closeStage() { if (stage) { if (stage.holder) stage.holder.remove(); stage.remove(); stage = null; } }
 
     // one embedded player; resolves with its "ready" message, or null (with the reason) if YouTube refuses to play it here
-    var sessionCap = 0, embedsWorked = false;
+    var sessionCap = 0, runSafe = 0, embedsWorked = false;
+    // (1.22.2) a lower count learned on an earlier day is no longer a ceiling: every run starts at the full count again and
+    // only what happens in this run (a crash, YouTube slowing down) holds it back. The old stored ceiling is dropped.
+    try { localStorage.removeItem(SKEY); } catch (e) {}
     var openEpoch = 0;   // bumped when the browser has thrown the players out: whoever is still waiting for one stops waiting
     function openPlayer(slot, id, job, k, onMsg, q) {
       return new Promise(function (resolve) {
@@ -1665,6 +1670,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     async function runAll(ids, prev) { enterMode(); try { return await runAll0(ids, prev); } finally { leaveMode(); } }
     async function runAll0(ids, prev) {
       running = true; stopReq = false; refresh(); keepAwake(true);
+      sessionCap = 0; runSafe = 0;   // each run starts at full strength
       results = ids.map(function (id, k) {
         var old = prev && prev.results && prev.results[k];
         return old && old.id === id && old.status !== "wait" ? old : { id: id, status: "wait", msg: "대기" };
@@ -1752,12 +1758,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       // of just those moments are taken in the chosen quality. Without skipping repeats every look is a photo: one pass.
       var two = prefs.dedup !== false, pmode = two ? "det" : prefs.quality;
       // A phone has little memory for video players: too many and the browser throws them all out (the sad face).
-      // Light players: up to 6; full-quality ones: up to 3. What made the browser give up before is remembered.
-      var auto = !(prefs.workers > 0), safe = Number(load(SKEY, 0)) || 0;
+      // Light players: up to 6; full-quality ones: up to 3. A crash lowers the count for the rest of this run only.
+      var auto = !(prefs.workers > 0), lowMem = (navigator.deviceMemory || 8) <= 4;
       var cap = opt.max || (auto ? (mobile ? (two ? ((navigator.deviceMemory || 8) <= 4 ? 4 : 6) : 3) : 16) : Math.min(16, prefs.workers));
-      if (auto && safe) cap = Math.max(1, Math.min(cap, safe));
+      if (auto && runSafe) cap = Math.max(1, Math.min(cap, runSafe));
       if (auto && sessionCap) cap = Math.max(1, Math.min(cap, sessionCap));   // YouTube slowed us down earlier in this run
-      var learned = Number(load(BKEY, 0)) || 0, first = mobile ? (two ? 3 : 2) : 4;
+      var learned = Number(load(BKEY, 0)) || 0, first = mobile ? (two ? (lowMem ? 3 : 4) : 2) : 4;
       var want = Math.min(cap, opt.start || (auto ? Math.max(first, Math.min(cap, learned || first)) : cap)), everMoved = false, noRead = false, mostPlayers = 0;
       await openStage();
       var byKey = {}, players = [], nextK = 0, outs = [], badVideo = false, queue = [], segs = [], errLog = [];
@@ -1991,7 +1997,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             // start again with a third fewer, and don't go above that on this device for now
             if (shrinks >= 6) break;
             batch = Math.max(1, crashed - Math.max(1, Math.round(crashed / 3))); crashed = 0; shrinks++; cap = batch; rampDone = true; before = null; best = batch; everCrashed = true;
-            save(SKEY, batch); save(BKEY, batch);
+            runSafe = batch;
             ui.status(label, "플레이어가 너무 많아 브라우저가 버티지 못했어요. " + batch + "개로 줄여서 하던 곳부터 이어서 해요…");
             await bsleep(1500);
             await addPlayers(batch);
@@ -2037,7 +2043,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       if (auto && best && !stopReq && !noRead) save(BKEY, best);
       // a whole video without the browser giving up: the limit learned from an earlier crash may go up by one again
-      if (auto && safe && !everCrashed && !stopReq && !noRead && segs.length) save(SKEY, safe + 1);
+      if (auto && runSafe && !everCrashed && !stopReq && !noRead && segs.length) runSafe++;
       players.forEach(function (P) { if (P.alive) post(P, { type: "stop" }); delete waiters[P.key]; });
       closeStage();
       var findSecs = (Date.now() - began) / 1000, findLen = Math.max(0, dur - preDone);
@@ -2181,8 +2187,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var heavy = /^(max|hd2160|hd1440|hd1080)$/.test(q), cls = heavy ? "h" : "l", SHOTKEY = "lecture-capture-shots-v2";
       var memory = load(SHOTKEY, {}), lowMem = (navigator.deviceMemory || 8) <= 4;
       var capP = mobile ? (heavy ? (lowMem ? 3 : 4) : (lowMem ? 5 : 6)) : 8;
-      var startP = memory[cls] || (mobile ? (heavy ? 2 : lowMem ? 3 : 4) : 4);
-      var want = Math.max(1, Math.min(capP, startP, Math.ceil(todo.length / 8))), lastTick = Date.now();
+      // start at the device's usual count, or higher if more paid off before; never lower because of an earlier bad run
+      var baseP = mobile ? (heavy ? 2 : lowMem ? 3 : 4) : 4, startP = Math.max(baseP, memory[cls] || 0);
+      var want = Math.max(1, Math.min(capP, startP, Math.ceil(todo.length / 8))), lastTick = Date.now(), crashN = 0;
       // (the speed is measured from 4 s after a player was added - it first has to load - over the next 10 s)
       var ramp = { on: true, baseAt: Date.now() + 4000, base: null, at: Date.now() + 14000, before: null, best: 0, adding: false };
       await add(want);
@@ -2199,7 +2206,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         var live = players.filter(function (P) { return P.alive; }), busy = live.filter(function (P) { return P.batch; });
         if (!busy.length && !queue.some(function (b) { return left(b).length; })) break;
         var dead = busy.filter(function (P) { return now - P.lastMsg > 8000; });
-        if (dead.length) { crashes++; openEpoch++; live.forEach(function (P) { drop(P, "응답 없음"); }); }
+        if (dead.length) { crashes++; crashN = live.length; openEpoch++; live.forEach(function (P) { drop(P, "응답 없음"); }); }
         else busy.forEach(function (P) { if (now - P.progAt > 45000) drop(P, P.diag || "진행 없음"); });
         live = players.filter(function (P) { return P.alive; });
         live.forEach(give);
@@ -2210,9 +2217,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             q = qs[Math.max(qs.indexOf(q) + 1, qs.indexOf("hd1080"))] || "hd720"; if (qs.indexOf(q) < 0) q = "hd720";
             out.lower = names[q] || q; crashes = 1;
           }
-          ui.status(label, crashes ? "사진 찍는 플레이어가 버티지 못해 " + (out.lower ? out.lower + " 화질, " : "") + "1개로 다시 해요…" : "사진 찍는 플레이어를 다시 여는 중…");
+          // after a first crash go on with one fewer than crashed (not with a single one); after more, one at a time
+          var reN = crashes === 1 ? Math.max(1, Math.min(capP, crashN - 1, Math.ceil(left([].concat.apply([], queue)).length / 4) || 1)) : 1;
+          ui.status(label, crashes ? "사진 찍는 플레이어가 버티지 못해 " + (out.lower ? out.lower + " 화질, " : "") + reN + "개로 다시 해요…" : "사진 찍는 플레이어를 다시 여는 중…");
           await bsleep(1500);
-          await add(1);
+          await add(reN);
         }
         out.most = Math.max(out.most || 0, live.length);
         // more players while it pays (not after a crash, and only while there is enough left to share)
@@ -2233,7 +2242,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       closeStage();
       // remember what this device managed: what paid off, or one less than what crashed
       try {
-        if (crashes) memory[cls] = Math.max(1, Math.min(memory[cls] || capP, (out.most || 2) - 1));
+        if (crashes) memory[cls] = Math.max(baseP, Math.min(memory[cls] || capP, (out.most || 2) - 1));
         else if (ramp.best && !stopReq) memory[cls] = Math.max(ramp.best, Math.min(memory[cls] || 0, capP));
         save(SHOTKEY, memory);
       } catch (e) {}
@@ -2606,6 +2615,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   var inFrame = false; try { inFrame = window.top !== window; } catch (e) { inFrame = true; }
   if (location.origin === YT_ORIGIN && /^\/embed\//.test(location.pathname)) { if (inFrame) workerRole(); }
   else if (location.origin === YT_ORIGIN || location.origin === YT_MOBILE) { if (!inFrame) youtubeRole(); }
-  else if (location.origin === HOST_ORIGIN) { if (!inFrame && !/^#lc-relay=/.test(location.hash)) hostRole(); }   // (#lc-relay: the helper window that hands packages to the note page)
+  else if (location.origin === HOST_ORIGIN) {
+    if (!inFrame && !/^#lc-relay=/.test(location.hash)) {
+      try { document.documentElement.setAttribute("data-lc-stage", "panel"); hostRole(); document.documentElement.setAttribute("data-lc-stage", "ok"); }
+      catch (e) {
+        // leave the reason where the page can show it, and drop the saved settings in case they were what broke it
+        try { document.documentElement.setAttribute("data-lc-err", String(e && (e.stack || e.message) || e).slice(0, 400)); localStorage.removeItem(PKEY); } catch (e2) {}
+      }
+    }
+  }   // (#lc-relay: the helper window that hands packages to the note page)
   else if (/(^|\.)livewiki\.com$/.test(location.hostname)) { if (!inFrame) livewikiRole(); }
 })();
