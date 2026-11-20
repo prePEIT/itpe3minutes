@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.21.0
+// @version      1.22.0
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -2606,6 +2606,6 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   var inFrame = false; try { inFrame = window.top !== window; } catch (e) { inFrame = true; }
   if (location.origin === YT_ORIGIN && /^\/embed\//.test(location.pathname)) { if (inFrame) workerRole(); }
   else if (location.origin === YT_ORIGIN || location.origin === YT_MOBILE) { if (!inFrame) youtubeRole(); }
-  else if (location.origin === HOST_ORIGIN) { if (!inFrame) hostRole(); }
+  else if (location.origin === HOST_ORIGIN) { if (!inFrame && !/^#lc-relay=/.test(location.hash)) hostRole(); }   // (#lc-relay: the helper window that hands packages to the note page)
   else if (/(^|\.)livewiki\.com$/.test(location.hostname)) { if (!inFrame) livewikiRole(); }
 })();

@@ -243,6 +243,30 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
 
   <section class="panel" aria-labelledby="h-set">
     <h2 id="h-set">2. 설정</h2>
+    <div class="row" id="taskRow">
+      <span class="lbl" id="lbl-task">무엇을 만들까요?</span>
+      <div class="chips" id="task" role="group" aria-labelledby="lbl-task">
+        <button type="button" class="chip" data-t="capture" aria-pressed="true">화면 캡처</button>
+        <button type="button" class="chip" data-t="digest" aria-pressed="false">영상 정리용 자료</button>
+      </div>
+      <div id="digestOpts" hidden>
+        <p class="hint"><b>영상 정리용 자료:</b> 장면 사진(3초 간격)과 함께, 영상의 말소리를 이 기기에서 직접 받아써서 대본을 만들어요(Whisper 음성 인식). 다 되면 '영상 정리 노트'로 자동으로 넘어가 Claude가 정리해요. 처음 한 번은 받아쓰기 모델을 내려받아요(약 250~330MB, 이후엔 기기에 보관). PC는 빠르고, 폰은 영상 길이보다 오래 걸릴 수 있어요.</p>
+        <div class="row">
+          <label for="asrLang">말하는 언어</label>
+          <select id="asrLang">
+            <option value="korean" selected>한국어</option>
+            <option value="english">영어</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="asrLevel">받아쓰기 정확도</label>
+          <select id="asrLevel">
+            <option value="normal" selected>보통 (Whisper small · 폰·PC)</option>
+            <option value="high">높음 (Whisper large-v3-turbo · PC 그래픽 필요, 처음 약 1.5GB 내려받기)</option>
+          </select>
+        </div>
+      </div>
+    </div>
     <div class="row" id="intervalRow">
       <span class="lbl" id="lbl-int">몇 초마다 확인할까요?</span>
       <div class="chips" id="intervals" role="group" aria-labelledby="lbl-int">
@@ -358,7 +382,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
   "use strict";
   var $ = function (s) { return document.querySelector(s); };
   var jobsEl = $("#jobs"), goBtn = $("#go"), barStatus = $("#barStatus");
-  var state = { jobs: [], running: false, stopReq: false, interval: 5, skipDup: true, ignoreMoving: true, capCaps: true, merge: true, minPx: 30, maxW: 0, quality: 0.9, mode: "file", speed: 2, ytMode: "jump" };
+  var state = { task: "capture", asrLang: "korean", asrLevel: "normal", jobs: [], running: false, stopReq: false, interval: 5, skipDup: true, ignoreMoving: true, capCaps: true, merge: true, minPx: 30, maxW: 0, quality: 0.9, mode: "file", speed: 2, ytMode: "jump" };
   var seq = 0, wakeLock = null;
 
   // ---------- helpers ----------
@@ -418,7 +442,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
   // ---------- settings (remembered on this phone) ----------
   var PREF_KEY = "lecture-capture-settings-v2";
   function savePrefs() {
-    try { localStorage.setItem(PREF_KEY, JSON.stringify({ interval: state.interval, skipDup: state.skipDup, ignoreMoving: state.ignoreMoving, capCaps: state.capCaps, merge: state.merge, minPx: state.minPx, maxW: state.maxW, mode: state.mode, speed: state.speed, ytMode: state.ytMode })); } catch (e) {}
+    try { localStorage.setItem(PREF_KEY, JSON.stringify({ task: state.task, asrLang: state.asrLang, asrLevel: state.asrLevel, interval: state.interval, skipDup: state.skipDup, ignoreMoving: state.ignoreMoving, capCaps: state.capCaps, merge: state.merge, minPx: state.minPx, maxW: state.maxW, mode: state.mode, speed: state.speed, ytMode: state.ytMode })); } catch (e) {}
   }
   function applyPrefsToUI() {
     document.querySelectorAll("#intervals .chip").forEach(function (c) { c.setAttribute("aria-pressed", Number(c.dataset.v) === state.interval ? "true" : "false"); });
@@ -436,6 +460,9 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
       if (saved.mode === "link" || saved.mode === "file") state.mode = saved.mode;
       if ([1, 1.5, 2].indexOf(saved.speed) >= 0) state.speed = saved.speed;
       if (saved.ytMode === "jump" || saved.ytMode === "play") state.ytMode = saved.ytMode;
+      if (saved.task === "digest" || saved.task === "capture") state.task = saved.task;
+      if (saved.asrLang === "korean" || saved.asrLang === "english") state.asrLang = saved.asrLang;
+      if (saved.asrLevel === "normal" || saved.asrLevel === "high") state.asrLevel = saved.asrLevel;
     }
   } catch (e) {}
   $("#intervals").addEventListener("click", function (e) {
@@ -445,17 +472,30 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     savePrefs(); refreshBar();
   });
   $("#dup").addEventListener("change", function (e) { state.skipDup = e.target.checked; lockSettings(state.running); savePrefs(); });
+  // 영상 정리용 자료: scenes every 3 s (enough for a write-up) plus the words; the capture settings stay as they were
+  function stepNow() { return state.task === "digest" ? 3 : state.interval; }
+  function showTask() {
+    document.querySelectorAll("#task .chip").forEach(function (c) { c.setAttribute("aria-pressed", c.dataset.t === state.task ? "true" : "false"); });
+    $("#digestOpts").hidden = state.task !== "digest"; $("#intervalRow").hidden = state.task === "digest";
+    $("#asrLang").value = state.asrLang; $("#asrLevel").value = state.asrLevel;
+    refreshBar();
+  }
+  $("#task").addEventListener("click", function (e) { var b = e.target.closest(".chip"); if (!b || state.running) return; state.task = b.dataset.t; savePrefs(); showTask(); });
+  $("#asrLang").addEventListener("change", function (e) { state.asrLang = e.target.value; savePrefs(); });
+  $("#asrLevel").addEventListener("change", function (e) { state.asrLevel = e.target.value; savePrefs(); });
   $("#moving").addEventListener("change", function (e) { state.ignoreMoving = e.target.checked; savePrefs(); });
   $("#caps").addEventListener("change", function (e) { state.capCaps = e.target.checked; savePrefs(); });
   $("#merge").addEventListener("change", function (e) { state.merge = e.target.checked; savePrefs(); });
   $("#sens").addEventListener("change", function (e) { state.minPx = Number(e.target.value); savePrefs(); });
   $("#size").addEventListener("change", function (e) { state.maxW = Number(e.target.value); savePrefs(); });
   function lockSettings(on) {
-    document.querySelectorAll("#intervals .chip").forEach(function (c) { c.disabled = on; });
+    document.querySelectorAll("#intervals .chip, #task .chip").forEach(function (c) { c.disabled = on; });
+    $("#asrLang").disabled = on; $("#asrLevel").disabled = on;
     var off = on || !state.skipDup;
     $("#dup").disabled = on; $("#moving").disabled = off; $("#caps").disabled = off; $("#merge").disabled = off; $("#sens").disabled = off; $("#size").disabled = on;
   }
   applyPrefsToUI();
+  setTimeout(showTask, 0);
 
   // ---------- jobs ----------
   $("#file").addEventListener("change", function (e) {
@@ -551,13 +591,14 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
         u.stats.append(el("span", null, "걸린 시간 " + mins((job.finished - job.started) / 1000).replace("약 ", "")));
       }
       if (job.missed) u.stats.append(el("span", null, "읽지 못한 지점 " + job.missed + "곳"));
+      if (job.wordsInfo) u.stats.append(el("span", null, job.wordsInfo));
     }
     var canSave = job.images.length > 0 && job.status !== "running" && job.status !== "waiting";
     u.save.hidden = !(canSave || job.status === "running");
     u.save.disabled = !canSave || job.saving;
     u.save.textContent = job.saving ? "압축하는 중…" : job.zipUrl ? "ZIP 다시 만들기" : "ZIP 만들기";
     u.get.hidden = !job.zipUrl || job.saving;
-    if (job.zipUrl) { u.get.href = job.zipUrl; u.get.download = job.name + "_캡처.zip"; u.get.textContent = "ZIP 받기 (" + job.zipMB + " MB)"; }
+    if (job.zipUrl) { u.get.href = job.zipUrl; u.get.download = job.name + (job.trans ? "_정리자료.zip" : "_캡처.zip"); u.get.textContent = "ZIP 받기 (" + job.zipMB + " MB)"; }
     if (u.over) u.over.hidden = !(job.kind === "file" && job.hasSaved && (job.status === "waiting" || job.status === "stopped"));
     var m = job.msg;
     u.msg.textContent = m; u.msg.className = "msg" + (job.err ? " err" : "");
@@ -1112,8 +1153,8 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     return (h >>> 0).toString(36) + "-" + f.size.toString(36);
   }
   // what a saved piece was made with: only pieces made with the same settings can be reused
-  function prefKey() { return ["f3", state.interval, state.skipDup, state.ignoreMoving, state.capCaps, state.merge, state.minPx, state.maxW].join("|"); }
-  function forget(key) { return Promise.all([dbDel("meta:" + key), dbDelAll("piece:" + key + ":")]); }
+  function prefKey() { return ["f3", stepNow(), state.skipDup, state.ignoreMoving, state.capCaps, state.merge, state.minPx, state.maxW].join("|"); }
+  function forget(key) { return Promise.all([dbDel("meta:" + key), dbDelAll("piece:" + key + ":"), dbDel("asr:" + key)]); }
   function pad(n, w) { return String(n).padStart(w, "0"); }
   // is there unfinished work for this file (with the settings as they are now)?
   async function savedFor(job) {
@@ -1182,7 +1223,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     job.duration = dur; job.msg = ""; renderJob(job);
 
     var scale = state.maxW && vw > state.maxW ? state.maxW / vw : 1, G = makeGeom(vw, vh), lastPaint = 0;
-    var step = state.interval, dedup = state.skipDup;
+    var step = stepNow(), dedup = state.skipDup;
     var o = { minPx: state.minPx, useCam: dedup && state.ignoreMoving, useCaps: dedup && state.ignoreMoving && !state.capCaps, doMerge: dedup && state.merge, dedup: dedup, q: state.quality, step: step,
       onNew: function (sc) { job.count++; addTick(job, sc.t); sc.blobP.then(function (b) { if (b && job.status === "running") addThumb(job, b, sc.t, sc); }); },
       onMerge: function (sc) { sc.blobP.then(function (b) { if (b && job.status === "running") replaceThumb(job, sc, b); }); } };
@@ -1416,9 +1457,12 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
       if (job.status !== "waiting" && job.status !== "stopped") continue;
       if (state.stopReq) break;
       if (job.kind === "yt") await processYouTube(job); else await processJob(job);
+      if (state.task === "digest" && job.kind === "file" && job.status === "done" && job.images.length && !state.stopReq) await digestJob(job);
     }
     closeStage();
     state.running = false; lockSettings(false); $("#keepOn").hidden = true; releaseWake(); refreshBar();
+    var dj = state.jobs.filter(function (j) { return j.kind === "file" && j.trans; });
+    if (state.task === "digest" && !state.stopReq && dj.length && dj.every(function (j) { return j.handed; }) && !state.jobs.some(function (j) { return j.status === "waiting" || j.status === "stopped"; })) goDigestSoon();
   }
 
   // ---------- YouTube links (the GitHub page on a PC browser) ----------
@@ -1854,6 +1898,347 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     if (job.status === "done") await autoSave(job);
   }
 
+
+  // =====================================================================
+  // 영상 정리용 자료: the words of a video file, written down on this device
+  // The sound is read straight out of the file (MP4: piece by piece, so a long lecture never sits in memory whole;
+  // other formats: decoded at once), turned into 16 kHz mono, cut into stretches of at most 30 s at the quietest
+  // moment, and written down by Whisper running in a worker of this page (WebGPU when the device has it).
+  // Nothing leaves the device but the model download.
+  // =====================================================================
+  var TF_URL = "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1/dist/transformers.min.js";
+  var MP4BOX_URL = "https://cdn.jsdelivr.net/npm/mp4box@0.5.4/dist/mp4box.all.min.js";
+  var DIGEST_URL = "https://claude.ai/artifact/7HE9i4d6W8yGdhMBpD8Yx5";
+  var SR = 16000;
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function loadScript(src) {
+    return new Promise(function (res, rej) {
+      if (window.MP4Box) return res();
+      var sc = document.createElement("script"); sc.src = src; sc.onload = function () { res(); }; sc.onerror = function () { rej(new Error("내려받지 못함: " + src)); };
+      document.head.appendChild(sc);
+    });
+  }
+  // to 16 kHz mono, block after block (a running box filter against aliasing, then straight-line interpolation)
+  function makeResampler(rate) {
+    var step = rate / SR, pos = 0, prev = 0, k = Math.max(1, Math.round(step)), hist = new Float32Array(k), hi = 0, hsum = 0;
+    return function (x) {
+      var n = x.length; if (!n) return new Float32Array(0);
+      var y = new Float32Array(n), i;
+      for (i = 0; i < n; i++) { hsum += x[i] - hist[hi]; hist[hi] = x[i]; hi = (hi + 1) % k; y[i] = hsum / k; }
+      var out = new Float32Array(Math.ceil((n - pos) / step) + 2), m = 0;
+      while (pos < n - 1) { var i0 = Math.floor(pos), f = pos - i0, a = i0 < 0 ? prev : y[i0], b = y[i0 + 1]; out[m++] = a + (b - a) * f; pos += step; }
+      pos -= n; prev = y[n - 1];
+      return out.subarray(0, m);
+    };
+  }
+  // the sound waiting to be written down (the reader pauses when it is a few minutes ahead)
+  function makeFeed() {
+    var blocks = [], len = 0, done = false, err = null, want = null, roomW = null, AHEAD = SR * 240;
+    function wake() { if (want) { var w = want; want = null; w(); } }
+    return {
+      push: function (a) { if (a && a.length) { blocks.push(a); len += a.length; } wake(); },
+      unshift: function (a) { if (a && a.length) { blocks.unshift(a); len += a.length; } },
+      end: function (e) { done = true; err = e || null; wake(); },
+      room: function () { return len < AHEAD ? Promise.resolve() : new Promise(function (r) { roomW = r; }); },
+      take: async function (n) {
+        while (len < n && !done) await new Promise(function (r) { want = r; });
+        if (err && !len) throw err;
+        var out = new Float32Array(Math.min(n, len)), o = 0;
+        while (o < out.length) { var b = blocks[0], k = Math.min(b.length, out.length - o); out.set(b.subarray(0, k), o); o += k; if (k === b.length) blocks.shift(); else blocks[0] = b.subarray(k); }
+        len -= out.length;
+        if (roomW && len < AHEAD) { var r = roomW; roomW = null; r(); }
+        return out;
+      }
+    };
+  }
+  // MP4 / MOV / M4V: the audio track, piece by piece (mp4box reads the file, WebCodecs decodes AAC)
+  async function readMp4Audio(file, feed, stopped) {
+    await loadScript(MP4BOX_URL);
+    if (typeof AudioDecoder === "undefined") throw new Error("이 브라우저는 소리 해독(WebCodecs)을 지원하지 않아요");
+    var mp4 = MP4Box.createFile(), track = null, decoder = null, rs = null, err = null, ready = false, jumped = false, reseek = false;
+    mp4.onError = function (e) { err = new Error("mp4: " + e); };
+    mp4.onReady = function (info) {
+      track = info.audioTracks && info.audioTracks[0];
+      if (!track) { err = new Error("소리 트랙이 없는 영상이에요"); return; }
+      var trak = mp4.getTrackById(track.id), entry = trak.mdia.minf.stbl.stsd.entries[0], desc = null;
+      try { desc = entry.esds.esd.descs[0].descs[0].data; } catch (e) {}
+      var rate = track.audio.sample_rate, ch = track.audio.channel_count;
+      rs = makeResampler(rate);
+      decoder = new AudioDecoder({
+        output: function (ad) {
+          try { var n = ad.numberOfFrames, c = ad.numberOfChannels, mono = new Float32Array(n), tmp = new Float32Array(n);
+            for (var q = 0; q < c; q++) { ad.copyTo(tmp, { planeIndex: q, format: "f32-planar" }); for (var i = 0; i < n; i++) mono[i] += tmp[i] / c; }
+            feed.push(rs(mono)); } catch (e) { err = e; } finally { ad.close(); }
+        },
+        error: function (e) { err = e; }
+      });
+      var cfg = { codec: track.codec, sampleRate: rate, numberOfChannels: ch }; if (desc) cfg.description = desc;
+      decoder.configure(cfg);
+      mp4.setExtractionOptions(track.id, null, { nbSamples: 400 });
+      mp4.start(); ready = true;
+      if (jumped) reseek = true;   // the index came at the end of the file: go back for the sound
+    };
+    mp4.onSamples = function (id, user, samples) {
+      for (var i = 0; i < samples.length; i++) {
+        var sm = samples[i];
+        try { decoder.decode(new EncodedAudioChunk({ type: "key", timestamp: Math.round(sm.cts * 1e6 / sm.timescale), duration: Math.round(sm.duration * 1e6 / sm.timescale), data: sm.data })); } catch (e) { err = e; }
+      }
+      mp4.releaseUsedSamples(id, samples[samples.length - 1].number + 1);
+    };
+    var off = 0, CH = 4 << 20;
+    while (off < file.size) {
+      if (err) throw err; if (stopped()) return;
+      var ab = await file.slice(off, off + CH).arrayBuffer(); ab.fileStart = off;
+      var next = mp4.appendBuffer(ab);
+      if (reseek) { reseek = false; jumped = false; var sk = mp4.seek(0, true); off = sk && typeof sk.offset === "number" ? sk.offset : 0; continue; }
+      if (typeof next === "number" && next > off + ab.byteLength) jumped = !ready;
+      off = typeof next === "number" && next > off ? next : off + ab.byteLength;
+      if (decoder) while (decoder.decodeQueueSize > 100) await sleep(10);
+      await feed.room();
+    }
+    mp4.flush();
+    if (err) throw err;
+    if (!track) throw new Error("소리 트랙을 찾지 못했어요");
+    if (decoder) await decoder.flush();
+    feed.end();
+  }
+  // anything else the browser can play: decoded at once (fine for files up to a few hundred MB)
+  async function readAllAudio(file, feed) {
+    if (file.size > 700 * 1048576) throw new Error("MP4가 아닌 큰 파일(700MB 넘음)은 소리를 한꺼번에 풀 수 없어요. MP4로 바꿔서 넣어 주세요");
+    var ab = await file.arrayBuffer(), buf = await new OfflineAudioContext(1, 1, SR).decodeAudioData(ab);
+    ab = null;
+    var n = buf.length, c = buf.numberOfChannels, mono = new Float32Array(n);
+    for (var q = 0; q < c; q++) { var d = buf.getChannelData(q); for (var i = 0; i < n; i++) mono[i] += d[i] / c; }
+    for (var o = 0; o < n; o += SR * 60) { feed.push(mono.slice(o, Math.min(n, o + SR * 60))); await feed.room(); }
+    feed.end();
+  }
+  function readAudio(file, feed, stopped) {
+    var mp4 = /\.(mp4|m4v|mov|m4a)$/i.test(file.name) || /mp4|quicktime/.test(file.type || "");
+    // (if the MP4 way fails before any sound came out, the whole-file way is tried instead)
+    var pushed = 0, push0 = feed.push; feed.push = function (a) { pushed += a ? a.length : 0; push0(a); };
+    var go = mp4 ? readMp4Audio(file, feed, stopped).catch(function (e) { if (stopped()) return; if (pushed) throw e; console.log("[lc] mp4 audio failed, decoding whole file:", e && e.message || e); return readAllAudio(file, feed); }) : readAllAudio(file, feed);
+    return go.catch(function (e) { feed.end(e instanceof Error ? e : new Error(String(e))); });
+  }
+  // where to cut a stretch of up to 30 s: the quietest fifth of a second in its last 8 s
+  function quietCut(x) {
+    if (x.length < SR * 29) return x.length;
+    var fr = (SR * 0.2) | 0, best = x.length, bestE = Infinity;
+    for (var st = SR * 22; st + fr <= x.length; st += fr >> 1) { var e = 0; for (var i = st; i < st + fr; i++) e += x[i] * x[i]; if (e < bestE) { bestE = e; best = st + (fr >> 1); } }
+    return best;
+  }
+  function rms(x) { var e = 0; for (var i = 0; i < x.length; i += 4) e += x[i] * x[i]; return Math.sqrt(e / Math.max(1, x.length / 4)); }
+
+  // Whisper in a worker: the plans are tried in order until one loads (model files that a device can't use, or that
+  // are missing, fall through to the next)
+  var WORKER_SRC = [
+    'import { pipeline, env } from "' + TF_URL + '";',
+    'env.allowLocalModels = false;',
+    'let asr = null;',
+    'self.onmessage = async (e) => {',
+    '  const m = e.data;',
+    '  if (m.type === "load") {',
+    '    let gpu = false, f16 = false;',
+    '    try { const a = navigator.gpu && await navigator.gpu.requestAdapter(); gpu = !!a; f16 = !!(a && a.features && a.features.has("shader-f16")); } catch (er) {}',
+    '    for (const p of m.plans) {',
+    '      if (p.device === "webgpu" && !gpu) continue;',
+    '      if (p.needF16 && !f16) continue;',
+    '      try {',
+    '        asr = await pipeline("automatic-speech-recognition", p.model, { device: p.device, dtype: p.dtype, progress_callback: (x) => { if (x && x.status === "progress") self.postMessage({ type: "progress", file: x.file, loaded: x.loaded || 0, total: x.total || 0 }); } });',
+    '        self.postMessage({ type: "ready", plan: p, gpu, f16 }); return;',
+    '      } catch (er) { self.postMessage({ type: "tried", plan: p, why: String(er && er.message || er).slice(0, 200) }); }',
+    '    }',
+    '    self.postMessage({ type: "fail", gpu, f16 });',
+    '  }',
+    '  if (m.type === "run") {',
+    '    try {',
+    '      const out = await asr(m.audio, { language: m.lang, task: "transcribe", return_timestamps: true });',
+    '      self.postMessage({ type: "done", id: m.id, text: out.text || "", chunks: (out.chunks || []).map((c) => ({ t: c.timestamp, text: c.text })) });',
+    '    } catch (er) { self.postMessage({ type: "err", id: m.id, why: String(er && er.message || er).slice(0, 200) }); }',
+    '  }',
+    '};'
+  ].join("\n");
+  function asrPlans(level) {
+    var test = null; try { test = JSON.parse(localStorage.getItem("lcAsrPlans") || "null"); } catch (e) {}
+    if (test) return test;
+    var small = [
+      { model: "Xenova/whisper-small", device: "webgpu", dtype: { encoder_model: "fp16", decoder_model_merged: "q4f16" }, needF16: true, label: "Whisper small (그래픽)" },
+      { model: "Xenova/whisper-small", device: "webgpu", dtype: { encoder_model: "q4", decoder_model_merged: "q4" }, label: "Whisper small (그래픽)" },
+      { model: "Xenova/whisper-small", device: "wasm", dtype: { encoder_model: "q8", decoder_model_merged: "q8" }, label: "Whisper small (CPU)" }];
+    if (level !== "high") return small;
+    return [{ model: "onnx-community/whisper-large-v3-turbo", device: "webgpu", dtype: { encoder_model: "fp16", decoder_model_merged: "q4f16" }, needF16: true, label: "Whisper large-v3-turbo" },
+      { model: "onnx-community/whisper-large-v3-turbo", device: "webgpu", dtype: { encoder_model: "fp16", decoder_model_merged: "q4" }, needF16: true, label: "Whisper large-v3-turbo" }].concat(small);
+  }
+  var asrW = null, asrReady = null, asrPlanKey = "", asrSeq = 0, asrWait = {};
+  function asrLoad(level, onMsg) {
+    var key = level; if (asrReady && asrPlanKey === key) return asrReady;
+    if (asrW) { try { asrW.terminate(); } catch (e) {} }
+    asrPlanKey = key;
+    asrW = new Worker(URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" })), { type: "module" });
+    asrReady = new Promise(function (res) {
+      var files = {};
+      asrW.onmessage = function (e) {
+        var d = e.data;
+        if (d.type === "progress") { files[d.file] = d; var lo = 0, to = 0; for (var k in files) { lo += files[k].loaded; to += files[k].total; } onMsg && onMsg("받아쓰기 모델 내려받는 중 " + (to ? Math.floor(lo / to * 100) + "% (" + Math.round(to / 1048576) + "MB, 처음 한 번만)" : "…")); }
+        else if (d.type === "tried") console.log("[lc] asr plan failed", d.plan && d.plan.model, d.why);
+        else if (d.type === "ready") res({ ok: true, plan: d.plan, gpu: d.gpu });
+        else if (d.type === "fail") res({ ok: false, why: d.gpu ? "모델을 불러오지 못했어요" : "모델을 불러오지 못했어요(인터넷 연결을 확인해 주세요)" });
+        else if ((d.type === "done" || d.type === "err") && asrWait[d.id]) { asrWait[d.id](d); delete asrWait[d.id]; }
+      };
+      asrW.onerror = function (e) { res({ ok: false, why: "받아쓰기 엔진을 시작하지 못했어요 (" + (e && e.message || "worker") + ")" }); };
+      asrW.postMessage({ type: "load", plans: asrPlans(level) });
+    });
+    asrReady.then(function (r) { if (!r.ok) { asrReady = null; asrPlanKey = ""; } });
+    return asrReady;
+  }
+  function asrRun(audio, lang) {
+    return new Promise(function (res) { var id = ++asrSeq; asrWait[id] = res; asrW.postMessage({ type: "run", id: id, audio: audio, lang: lang }, [audio.buffer]); });
+  }
+  // what Whisper writes into silence or music, and lines it keeps repeating
+  var JUNK = /시청해\s*주셔서\s*감사|구독과\s*좋아요|좋아요와\s*구독|구독\s*부탁|MBC\s*뉴스|자막\s*(제공|제작)|thank you for watching|subtitles? by/i;
+  // a line that is mostly the same few letters over and over (Whisper looping on noise or unclear sound)
+  function loopy(t) {
+    var z = String(t).replace(/\s+/g, ""); if (z.length < 30) return false;
+    var u = {}; for (var i = 0; i < z.length; i++) u[z[i]] = 1;
+    if (Object.keys(u).length / z.length < 0.1 || /(.{1,12}?)\1{5,}/.test(z)) return true;
+    // the same few words four times in a row ("a character that is not a character that is not ...")
+    var w = String(t).trim().split(/\s+/);
+    for (var n = 1; n <= 6; n++) for (var o = 0; o < n; o++) {
+      var run = 1;
+      for (var k = o + n; k + n <= w.length; k += n) { if (w.slice(k, k + n).join(" ") === w.slice(k - n, k).join(" ")) { if (++run >= 4) return true; } else run = 1; }
+    }
+    return false;
+  }
+  function tidyChunks(chunks, offset, len, last) {
+    var out = [];
+    (chunks || []).forEach(function (c) {
+      var tx = String(c.text || "").replace(/\s+/g, " ").trim(), t0 = c.t && isFinite(c.t[0]) ? c.t[0] : 0;
+      if (!tx || JUNK.test(tx) || loopy(tx) || t0 > len / SR + 1) return;
+      var t = Math.round((offset + Math.max(0, t0)) * 10) / 10;
+      var prev = out.length ? out[out.length - 1] : last;
+      if (prev && prev.text === tx) { prev.rep = (prev.rep || 1) + 1; return; }
+      out.push({ t: t, text: tx });
+    });
+    return out;
+  }
+
+  // one job's words: kept on the device as they come, so a closed tab carries on where it stopped
+  async function transcribeJob(job) {
+    var key = "asr:" + job.key, kept = await dbGet(key), lang = state.asrLang, level = state.asrLevel;
+    if (kept && (kept.lang !== lang || kept.level !== level)) kept = null;
+    if (kept && kept.done) return { ok: true, segs: kept.segs, model: kept.model };
+    var segs = kept ? kept.segs.slice() : [], upto = kept ? kept.upto : 0;
+    job.status = "running"; job.phase = "받아쓰기 준비 중…"; job.pos = 0; renderJob(job); refreshBar();
+    var ld = await asrLoad(level, function (m) { job.phase = m; renderJob(job); });
+    if (!ld.ok) return { ok: false, why: ld.why };
+    var model = ld.plan.label || ld.plan.model;
+    job.phase = "대본 만드는 중…"; renderJob(job);
+    var feed = makeFeed(), stopped = function () { return state.stopReq; };
+    var reading = readAudio(job.file, feed, stopped);
+    var at = 0, began = Date.now(), from = upto, lastSave = Date.now(), wrote = 0;
+    try {
+      while (!state.stopReq) {
+        var x = await feed.take(SR * 30);
+        if (!x.length) break;
+        var cut = quietCut(x);
+        if (cut < x.length) { feed.unshift(x.slice(cut)); x = x.slice(0, cut); }
+        var t0 = at, xlen = x.length; at += xlen / SR;   // (the length is noted now: handing the sound to the worker empties x)
+        if (at <= upto + 0.05) continue;                         // written down before
+        if (rms(x) < 0.003) continue;                           // silence: nothing to write (and Whisper would invent)
+        var r = await asrRun(x, lang);
+        if (r.type === "err") throw new Error(r.why);
+        try { if (localStorage.getItem("lcDebug")) console.log("[lc] asr window " + t0.toFixed(1) + "s +" + (xlen / SR).toFixed(1) + "s: " + JSON.stringify(r).slice(0, 600)); } catch (e) {}
+        var add = tidyChunks(r.chunks, t0, xlen, segs[segs.length - 1]);
+        if (!add.length && r.text && r.text.trim() && !JUNK.test(r.text) && !loopy(r.text)) add = [{ t: Math.round(t0 * 10) / 10, text: r.text.trim() }];
+        segs = segs.concat(add); upto = at; wrote += xlen / SR;
+        var spent = (Date.now() - began) / 1000, speed = wrote / Math.max(1, spent), leftS = job.duration ? (job.duration - at) / Math.max(0.05, speed) : NaN;
+        job.pos = Math.min(job.duration || at, at);
+        job.phase = "대본 만드는 중 " + (job.duration ? Math.floor(at / job.duration * 100) + "%" : clock(at)) + " · " + segs.length + "줄" + (isFinite(leftS) && wrote > 20 ? " · 남은 시간 " + mins(leftS) : "") + " · " + (ld.gpu ? "그래픽" : "CPU") + " " + speed.toFixed(1) + "배속";
+        renderJob(job); refreshBar();
+        if (Date.now() - lastSave > 5000) { lastSave = Date.now(); await dbPut(key, { lang: lang, level: level, model: model, upto: upto, segs: segs, done: false, at: Date.now() }); }
+      }
+    } catch (e) {
+      await dbPut(key, { lang: lang, level: level, model: model, upto: upto, segs: segs, done: false, at: Date.now() });
+      return { ok: false, why: String(e && e.message || e), segs: segs };
+    }
+    await reading;
+    var done = !state.stopReq;
+    await dbPut(key, { lang: lang, level: level, model: model, upto: upto, segs: segs, done: done, at: Date.now() });
+    if (!done) return { ok: false, why: "멈춤", segs: segs, stopped: true };
+    return { ok: true, segs: segs, model: model };
+  }
+
+  // ---------- hand-over to the note page (through the '강의 캡처 연결' script, when it is installed) ----------
+  var bridgeP = null;
+  function bridge() {
+    if (bridgeP) return bridgeP;
+    bridgeP = new Promise(function (res) {
+      var got = false, n = 0;
+      function on(e) { var d = e.data; if (e.source === window && d && d.lcb === 1 && d.dir === "out" && d.op === "hello") { got = true; window.removeEventListener("message", on); res(true); } }
+      window.addEventListener("message", on);
+      (function ping() { if (got) return; if (n++ > 12) { window.removeEventListener("message", on); return res(false); } try { window.postMessage({ lcb: 1, dir: "in", op: "ping" }, "*"); } catch (e) {} setTimeout(ping, 250); })();
+    });
+    return bridgeP;
+  }
+  function bridgePut(item, blob) {
+    return bridge().then(function (ok) {
+      if (!ok) return { ok: false, why: "'강의 캡처 연결' 스크립트가 응답하지 않음" };
+      return new Promise(function (res) {
+        var ref = Math.random().toString(36).slice(2), t = 0;
+        function on(e) { var d = e.data; if (e.source === window && d && d.lcb === 1 && d.dir === "out" && d.ref === ref && (d.op === "put-ok" || d.op === "put-fail")) { window.removeEventListener("message", on); clearTimeout(t); res({ ok: d.op === "put-ok", why: d.why || "" }); } }
+        window.addEventListener("message", on);
+        window.postMessage({ lcb: 1, dir: "in", op: "put", ref: ref, item: item, blob: blob }, "*");
+        t = setTimeout(function () { window.removeEventListener("message", on); res({ ok: false, why: "저장이 3분 안에 끝나지 않음" }); }, 180000);
+      });
+    });
+  }
+  function transcriptText(job) {
+    var head = ["제목: " + job.name, "파일: " + job.label, "길이: " + clock(job.duration || 0), "대본: 이 기기에서 받아쓰기 (" + (job.trans.model || "Whisper") + ")", "-----"];
+    return head.concat(job.trans.segs.map(function (x) { return "[" + clock(x.t) + "] " + x.text; })).join("\n") + "\n";
+  }
+  function digestJson(job) {
+    return JSON.stringify({ kind: "lecture-capture", version: 1, title: job.name, id: "", url: "", duration: job.duration || 0,
+      transcript: job.trans && job.trans.segs.length ? { source: "이 기기에서 받아쓰기", lang: state.asrLang === "english" ? "en" : "ko", name: job.trans.model || "Whisper", segs: job.trans.segs } : null,
+      photos: job.images.map(function (im) { return { file: im.name, t: Math.round(im.t * 10) / 10 }; }) });
+  }
+  async function lighter(b) {
+    try {
+      var bmp = await createImageBitmap(b), sc = Math.min(1, 1280 / bmp.width), c = document.createElement("canvas");
+      c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc); c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height); try { bmp.close(); } catch (e) {}
+      var o = await new Promise(function (r) { c.toBlob(r, "image/jpeg", 0.75); });
+      return o && o.size < b.size ? o : b;
+    } catch (e) { return b; }
+  }
+  // after the scenes: the words, then the package for the note page
+  async function digestJob(job) {
+    job.wordsInfo = "";
+    var tr = await transcribeJob(job);
+    job.phase = "";
+    if (tr.stopped) { job.status = "stopped"; job.msg = "멈췄어요. 대본은 " + clock(tr.segs ? (tr.segs.length ? tr.segs[tr.segs.length - 1].t : 0) : 0) + "까지 써 두었어요. '다시 시작'을 누르면 이어서 써요."; renderJob(job); return; }
+    job.status = "done"; job.pos = job.duration;
+    if (!tr.ok) { job.trans = null; job.wordsInfo = "대본 못 만듦"; job.msg = "대본을 만들지 못했어요 (" + tr.why + "). 사진은 'ZIP 만들기'로 받을 수 있어요."; job.err = true; renderJob(job); return; }
+    job.trans = { segs: tr.segs, model: tr.model };
+    job.wordsInfo = "대본 " + tr.segs.length + "줄";
+    job.msg = "정리 노트로 보내는 중…"; renderJob(job);
+    try {
+      var zip = new JSZip();
+      for (var i = 0; i < job.images.length; i++) zip.file(job.images[i].name, await lighter(job.images[i].blob), { binary: true });
+      zip.file("transcript.txt", transcriptText(job)); zip.file("digest-data.json", digestJson(job));
+      var blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+      var put = await bridgePut({ kind: "zip", name: job.name + "_정리자료.zip", id: "", title: job.name, words: tr.segs.length > 0 }, blob);
+      job.handed = put.ok;
+      job.msg = put.ok ? "정리 노트로 보냈어요. 정리 노트 페이지가 알아서 정리해요." : "정리 노트로 자동으로 보내지 못했어요 (" + put.why + "). 'ZIP 만들기' → 'ZIP 받기'로 받아서 정리 노트 페이지에서 고르세요.";
+      job.err = !put.ok;
+      if (put.ok) await forget(job.key);
+    } catch (e) { job.err = true; job.msg = "정리 노트로 보낼 자료를 만들지 못했어요 (" + (e && e.message || e) + ")."; }
+    renderJob(job);
+  }
+  function goDigestSoon() {
+    var left = 6, stay = false, box = el("div", "notice"), sp = el("span"), b = el("button", "btn ghost", "여기 머무르기");
+    b.type = "button"; b.addEventListener("click", function () { stay = true; box.remove(); });
+    box.append(sp, " ", b); jobsEl.parentNode.insertBefore(box, jobsEl);
+    (function tick2() { if (stay) return; if (left <= 0) { location.href = DIGEST_URL; return; } sp.textContent = left + "초 뒤 '영상 정리 노트'로 넘어가요. 자료는 이미 넘어가서 바로 정리돼요."; left--; setTimeout(tick2, 1000); })();
+  }
+
   // ---------- save ----------
   async function saveJob(job) {
     if (job.saving || !job.images.length) return;
@@ -1863,6 +2248,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     try {
       var zip = new JSZip();
       job.images.forEach(function (im) { zip.file(im.name, im.blob, { binary: true }); });
+      if (job.trans) { zip.file("transcript.txt", transcriptText(job)); zip.file("digest-data.json", digestJson(job)); }
       var blob = await zip.generateAsync({ type: "blob", compression: "STORE", streamFiles: true });
       job.zipUrl = URL.createObjectURL(new Blob([blob], { type: "application/zip" }));
       job.zipMB = (blob.size / 1048576).toFixed(1);
@@ -1887,9 +2273,9 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
       } else barStatus.textContent = "준비 중…";
     } else {
       goBtn.className = "btn"; goBtn.disabled = todo === 0;
-      goBtn.textContent = state.jobs.some(function (j) { return j.status === "stopped"; }) ? "다시 시작" : "캡처 시작";
+      goBtn.textContent = state.jobs.some(function (j) { return j.status === "stopped"; }) ? "다시 시작" : state.task === "digest" ? "정리 자료 만들기" : "캡처 시작";
       if (!state.jobs.length) barStatus.textContent = "영상을 고르면 시작할 수 있어요.";
-      else if (todo) { barStatus.textContent = ""; barStatus.append(el("b", null, "영상 " + todo + "개"), " 처리 대기 · " + state.interval + "초 간격"); }
+      else if (todo) { barStatus.textContent = ""; barStatus.append(el("b", null, "영상 " + todo + "개"), " 처리 대기 · " + (state.task === "digest" ? "장면 3초 간격 + 대본 받아쓰기" : state.interval + "초 간격")); }
       else barStatus.textContent = "끝났어요. 영상마다 'ZIP 만들기'를 눌러 주세요." + (done ? "" : "");
     }
   }
