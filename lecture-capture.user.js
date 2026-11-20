@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.22.2
+// @version      1.22.3
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -42,7 +42,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
   // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
-  try { document.documentElement.setAttribute("data-lc-cap", "1.22.2"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
+  try { document.documentElement.setAttribute("data-lc-cap", "1.22.3"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -1127,8 +1127,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       });
     });
   }
-  // a lighter copy of a photo for the hand-over (at most 1280 wide, JPEG 75%)
+  // a lighter copy of a photo for the hand-over (at most 1280 wide, JPEG 75%). 720p photos (what 영상 정리 takes) are handed
+  // over as they are: decoding and re-encoding hundreds of them took minutes on a phone, and the note page resizes them anyway.
   async function lighter(b) {
+    if (!b || b.size <= 700000 || /^(hd720|large|medium|small)$/.test(prefs.quality)) return b;
     try {
       var bmp = await createImageBitmap(b), s = Math.min(1, 1280 / bmp.width), c = document.createElement("canvas");
       c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s); c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height); try { bmp.close(); } catch (e) {}
@@ -1136,17 +1138,49 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       return o && o.size < b.size ? o : b;
     } catch (e) { return b; }
   }
-  async function saveZip(title, scenes, waitMs, extra) {
-    var handOver = !!(extra && prefs.mode === "digest") && await bridge(), lite = handOver ? new JSZip() : null;
+  // A plain ZIP (no compression - JPEGs don't shrink anyway) written directly. JSZip did the same in small timed steps,
+  // and a browser slows timers right down in a tab that is not in front, so making the ZIP could crawl for minutes.
+  var CRC_T = null;
+  function crc32(u8) {
+    if (!CRC_T) { CRC_T = new Int32Array(256); for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; CRC_T[n] = c; } }
+    var crc = -1; for (var i = 0; i < u8.length; i++) crc = CRC_T[(crc ^ u8[i]) & 255] ^ (crc >>> 8);
+    return (crc ^ -1) >>> 0;
+  }
+  // yields to the page without a timer (a message to itself), so the status line can update even in a background tab
+  function yieldNow() { return new Promise(function (r) { try { var ch = new MessageChannel(); ch.port1.onmessage = function () { r(); }; ch.port2.postMessage(0); } catch (e) { r(); } }); }
+  function zipStore(entries) {
+    var enc = new TextEncoder(), d = new Date(), parts = [], cen = [], off = 0, cenLen = 0;
+    var dt = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(), tm = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+    entries.forEach(function (e) {
+      var nm = enc.encode(e.name), n = e.data.length, lh = new DataView(new ArrayBuffer(30)), ch = new DataView(new ArrayBuffer(46));
+      lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true); lh.setUint16(10, tm, true); lh.setUint16(12, dt, true);
+      lh.setUint32(14, e.crc, true); lh.setUint32(18, n, true); lh.setUint32(22, n, true); lh.setUint16(26, nm.length, true); lh.setUint16(28, 0, true);
+      ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true); ch.setUint16(12, tm, true); ch.setUint16(14, dt, true);
+      ch.setUint32(16, e.crc, true); ch.setUint32(20, n, true); ch.setUint32(24, n, true); ch.setUint16(28, nm.length, true); ch.setUint32(42, off, true);
+      parts.push(lh.buffer, nm, e.data); cen.push(ch.buffer, nm);
+      off += 30 + nm.length + n; cenLen += 46 + nm.length;
+    });
+    var end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, entries.length, true); end.setUint16(10, entries.length, true); end.setUint32(12, cenLen, true); end.setUint32(16, off, true);
+    return new Blob(parts.concat(cen, [end.buffer]), { type: "application/zip" });
+  }
+  async function entryOf(name, blobOrText) {
+    var u8 = typeof blobOrText === "string" ? new TextEncoder().encode(blobOrText) : new Uint8Array(await new Response(blobOrText).arrayBuffer());
+    return { name: name, data: u8, crc: crc32(u8) };
+  }
+  async function saveZip(title, scenes, waitMs, extra, say) {
+    say = say || function () {};
+    var handOver = !!(extra && prefs.mode === "digest") && await bridge();
     if (extra && prefs.mode === "digest" && !handOver) bridgeWhy = "'강의 캡처 연결' 스크립트가 응답하지 않음";
-    var zip = new JSZip();
+    var full = [], lite = handOver ? [] : null, liteSame = true, total = scenes.length, t0 = Date.now();
     for (var i = 0; i < scenes.length; i++) {
       var b = await scenes[i].blobP;
       if (!b) continue;
-      var data = b; try { data = await new Response(b).arrayBuffer(); } catch (e) {}
-      var fname = String(i + 1).padStart(4, "0") + "_" + fmt(scenes[i].t) + ".jpg";
-      zip.file(fname, data, { binary: true }); if (extra) (extra.photos = extra.photos || []).push({ file: fname, t: Math.round(scenes[i].t * 10) / 10 });
-      if (lite) lite.file(fname, await lighter(new Blob([data], { type: "image/jpeg" })), { binary: true });
+      if (!(b instanceof Blob)) { try { b = new Blob([b], { type: "image/jpeg" }); } catch (e) { continue; } }
+      var fname = String(i + 1).padStart(4, "0") + "_" + fmt(scenes[i].t) + ".jpg", en = await entryOf(fname, b);
+      full.push(en); if (extra) (extra.photos = extra.photos || []).push({ file: fname, t: Math.round(scenes[i].t * 10) / 10 });
+      if (lite) { var lb0 = await lighter(b); if (lb0 === b) lite.push(en); else { liteSame = false; lite.push(await entryOf(fname, lb0)); } }
+      if (i % 10 === 9 || i === total - 1) { say("ZIP 만드는 중… 사진 " + (i + 1) + " / " + total + "장"); await yieldNow(); }
     }
     // for writing it up later (the 'video digest' page or a chat with Claude): the words and where each photo sits in time
     if (extra) {
@@ -1154,11 +1188,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var ttxt = tr ? transcriptText(Object.assign({ title: title }, extra), tr) : null;
       var djson = JSON.stringify({ kind: "lecture-capture", version: 1, title: title, id: extra.id, url: watchUrl(extra.id), duration: extra.dur || 0,
         transcript: tr ? { source: tr.source, lang: tr.lang, name: tr.name, segs: tr.segs } : null, photos: extra.photos || [] });
-      if (ttxt) zip.file("transcript.txt", ttxt);
-      zip.file("digest-data.json", djson);
-      if (lite) { if (ttxt) lite.file("transcript.txt", ttxt); lite.file("digest-data.json", djson); }
+      var meta = []; if (ttxt) meta.push(await entryOf("transcript.txt", ttxt)); meta.push(await entryOf("digest-data.json", djson));
+      full = full.concat(meta); if (lite) lite = lite.concat(meta);
     }
-    var blob = await zip.generateAsync({ type: "blob", compression: "STORE", streamFiles: true });
+    var blob = zipStore(full);
+    if (DBG) console.log("[lc] zip " + full.length + " files, " + Math.round(blob.size / 1e6) + " MB in " + (Date.now() - t0) + " ms");
     // the download link is clicked inside a hidden frame: Firefox closes the work window when this page itself "navigates" to a download
     var url = URL.createObjectURL(blob), name = safeName(title) + (prefs.mode === "digest" ? "_정리자료.zip" : "_캡처.zip"), f = null;
     try {
@@ -1171,9 +1205,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
     var handed = false;
     if (lite) {
-      try { var lb = await lite.generateAsync({ type: "blob", compression: "STORE" });
-        handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, lb); } catch (e) { handed = false; }
+      say("정리 노트로 보내는 중…");
+      // nothing needed shrinking: the very same ZIP goes to the note page (no second ZIP)
+      try { handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, liteSame ? blob : zipStore(lite)); } catch (e) { handed = false; }
     }
+    full = null; lite = null;
     await sleep(waitMs == null ? 2500 : waitMs);
     return { handed: handed, why: handed ? "" : bridgeWhy };
   }
@@ -2110,11 +2146,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         res.note = [miss.size, miss.lower ? "화질을 " + miss.lower + "로 낮춰 찍었어요" : "",
           "찾기 " + clock(findSecs) + (findSecs > 3 && findLen > 30 ? "(평균 " + (findLen / findSecs).toFixed(1) + "배속, 플레이어 최대 " + mostPlayers + "개)" : ""), "찍기 " + clock(shotSecs) + (miss.most ? "(플레이어 최대 " + miss.most + "개)" : "")].filter(Boolean).join(" · ");
       }
-      ui.status(label, "ZIP 만드는 중…");
+      ui.status(label, res.subsP ? "대본을 마저 받는 중… (최대 30초)" : "ZIP 만드는 중…");
       var trn = res.subsP ? await Promise.race([res.subsP, bsleep(30000).then(function () { return null; })]) : null;
       if (!(trn && trn.ok) && prefs.subs !== false) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
       if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
-      var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null);
+      var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null, function (t) { ui.status(label, t); });
       res.handed = !!(sv && sv.handed); res.handWhy = sv && sv.why || "";
       res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" + (trn && trn.why ? "(" + String(trn.why).slice(0, 60) + ")" : "") : "";
       if (res.subsInfo) res.note = [res.note, res.subsInfo, res.handed ? "정리 노트로 보냄" : prefs.mode === "digest" ? "정리 노트 자동 전달 안 됨(" + (res.handWhy || "?") + ")" : ""].filter(Boolean).join(" · ");
@@ -2520,7 +2556,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       ui.status("저장 중", "대본 찾는 중…");
       var trn = prefs.subs !== false ? await watchTranscript(id).catch(function () { return null; }) : null;
       ui.status("저장 중", "ZIP 만드는 중…");
-      await saveZip(title + (stopReq ? "_중단" : ""), scenes, null, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null);
+      await saveZip(title + (stopReq ? "_중단" : ""), scenes, null, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null, function (t) { ui.status("저장 중", t); });
       ui.status("끝났어요.", "사진 " + scenes.length + "장을 저장했어요.");
       report({ ok: !stopReq, title: title, count: scenes.length, secs: (Date.now() - began) / 1000, msg: stopReq ? "멈춤 · 찍은 " + scenes.length + "장은 저장" : "" });
     })();

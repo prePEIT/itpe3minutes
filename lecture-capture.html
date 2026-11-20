@@ -432,7 +432,7 @@ label.inline { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; 
     } else if (bridge) {
       why.textContent = "Tampermonkey는 이 페이지에서 돌고 있어요('강의 캡처 연결'이 응답함). 그런데 '강의 화면 캡처' 스크립트가 이 페이지에서 시작하지 않았어요.";
       ol.appendChild(li(["Edge 메뉴 → 확장 → Tampermonkey → 대시보드에서 '강의 화면 캡처 (유튜브)'가 있는지, 스위치가 켜져 있는지 봐요."]));
-      ol.appendChild(li(["없거나 버전이 1.22.2보다 낮으면 여기를 눌러 설치·업데이트해요: ", ["강의 화면 캡처 설치", CAP]]));
+      ol.appendChild(li(["없거나 버전이 1.22.3보다 낮으면 여기를 눌러 설치·업데이트해요: ", ["강의 화면 캡처 설치", CAP]]));
       ol.appendChild(li(["그 스크립트를 열어 '설정' 탭의 '사용자 제외(@exclude)'나 '사용자 일치'에 이상한 주소가 들어가 있지 않은지 봐요."]));
     } else {
       why.textContent = "이 페이지에서 Tampermonkey 스크립트가 하나도 돌지 않았어요(두 스크립트 모두 응답 없음). 다른 기기에서는 잘 된다면, 이 기기의 Tampermonkey 안에 예전 버전(1.21)의 '강의 캡처 연결'이 쌓아 둔 큰 자료(사진 묶음)가 남아 스크립트를 못 띄우는 것으로 보여요. 스크립트를 지웠다 다시 깔아도 그 자료는 Tampermonkey 안(휴지통·저장소)에 남을 수 있어요.";
