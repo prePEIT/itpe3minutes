@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.24.2
+// @version      1.24.3
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -42,7 +42,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
   // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
-  try { document.documentElement.setAttribute("data-lc-cap", "1.24.2"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
+  try { document.documentElement.setAttribute("data-lc-cap", "1.24.3"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -267,7 +267,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (prefs.subsV !== 2) { prefs.subs = false; prefs.subsV = 2; }
   // "영상 정리" mode: the transcript plus the scenes, gathered quickly (fewer looks, 720p) for the digest page.
   // These settings only hold while such a job runs; the user's own capture settings are kept as they were.
-  var DIGEST_SET = { every: 3, quality: "hd720", dedup: true, subs: true, ignoreCaptions: false };
+  // (1.24.3) at 720p the players that look for the changes take the photos right away: one pass instead of two (much faster)
+  var DIGEST_SET = { every: 3, quality: "hd720", dedup: true, subs: true, ignoreCaptions: false, fastShot: true };
   var userSet = null;
   function enterMode() { if (prefs.mode === "digest" && !userSet) { userSet = {}; Object.keys(DIGEST_SET).forEach(function (k) { userSet[k] = prefs[k]; }); Object.assign(prefs, DIGEST_SET); } }
   function leaveMode() { if (userSet) { Object.assign(prefs, userSet); userSet = null; } }
@@ -1432,7 +1433,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "caps" }), h("span", { text: "자막이 바뀌어도 새로 찍기 (화면과 자막이 둘 다 같을 때만 건너뜀, 추천)" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "merge" }), h("span", { text: "내용이 덧붙기만 하면 완성된 한 장만 남기기" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "subs" }), h("span", { text: "대본(자막)도 ZIP에 함께 넣기" })]),
-        h("label", { class: "c" }, [h("input", { type: "checkbox", id: "fastShot" }), h("span", { text: "빠르게 찍기: 화질 720p 이하일 때 장면을 찾으면서 바로 찍어요(사진 찍는 단계가 없어져요. 폰에서 더 빠른지 비교해 보세요)" })]),
+        h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "fastShot" }), h("span", { text: "빠르게 찍기: 화질 720p 이하일 때 장면을 찾으면서 바로 찍어요(사진 찍는 단계가 없어져요. 폰에서 더 빠른지 비교해 보세요)" })]),
         h("div", { class: "r" }, [h("label", {}, ["사진 저장 형식", h("select", { id: "saveAs" }, [opt("zip", "ZIP (사진 파일 묶음)"), opt("pdf", "PDF (사진 아래에 그때 한 말까지)"), opt("both", "ZIP + PDF 둘 다")])])]),
         h("label", { class: "c" }, [h("input", { type: "checkbox", id: "crop" }), h("span", { text: "슬라이드 부분만 남기기 (모든 사진에 공통인 검은 띠·테두리·빈 여백을 잘라내요)" })]),
         h("label", { class: "c digOnly" }, [h("input", { type: "checkbox", id: "keepZip" }), h("span", { text: "정리 자료 ZIP도 다운로드 폴더에 저장 (정리 노트로 자동 전달되면 없어도 돼요. 전달이 안 되면 늘 저장해요)" })]),
@@ -1978,7 +1979,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (auto && runSafe) cap = Math.max(1, Math.min(cap, runSafe));
       if (auto && sessionCap) cap = Math.max(1, Math.min(cap, sessionCap));   // YouTube slowed us down earlier in this run
       // a phone starts with 4 light players (3 with little memory) and adds more while it pays, up to 8
-      var learned = Number(load(BKEY, 0)) || 0, first = mobile ? (two ? (lowMem ? 3 : 4) : lightQ ? 3 : 2) : 4;
+      var learned = Number(load(BKEY, 0)) || 0, first = mobile ? (two ? (lowMem ? 3 : 4) : lightQ ? (lowMem ? 3 : 4) : 2) : 4;
       var want = Math.min(cap, opt.start || (auto ? Math.max(first, Math.min(cap, learned || first)) : cap)), everMoved = false, noRead = false, mostPlayers = 0;
       var stg = await openStage();
       var byKey = {}, players = [], nextK = 0, outs = [], badVideo = false, queue = [], segs = [], errLog = [];
@@ -2343,7 +2344,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           res.note = [miss.size, miss.lower ? "화질을 " + miss.lower + "로 낮춰 찍었어요" : "",
             "찾기 " + clock(findSecs) + (findSecs > 3 && findLen > 30 ? "(평균 " + (findLen / findSecs).toFixed(1) + "배속, 플레이어 최대 " + mostPlayers + "개)" : ""), "찍기 " + clock(shotSecs) + (miss.most ? "(플레이어 최대 " + miss.most + "개)" : "")].filter(Boolean).join(" · ");
         }
-        ui.status(label, res.subsP ? "대본을 마저 받는 중… (최대 30초)" : "ZIP 만드는 중…");
+        if (!two) res.note = "찾으며 찍기 " + clock(findSecs) + (findSecs > 3 && findLen > 30 ? "(평균 " + (findLen / findSecs).toFixed(1) + "배속, 플레이어 최대 " + mostPlayers + "개)" : "");
+      ui.status(label, res.subsP ? "대본을 마저 받는 중… (최대 30초)" : "ZIP 만드는 중…");
         var trn = res.subsP ? await Promise.race([res.subsP, bsleep(30000).then(function () { return null; })]) : null;
         if (!(trn && trn.ok) && (prefs.subs !== false || saveFormat() !== "zip")) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
         if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
