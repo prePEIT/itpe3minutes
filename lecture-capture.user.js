@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.24.0
+// @version      1.24.2
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -42,7 +42,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
   // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
-  try { document.documentElement.setAttribute("data-lc-cap", "1.24.0"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
+  try { document.documentElement.setAttribute("data-lc-cap", "1.24.2"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -1233,28 +1233,34 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   async function pdfWithWords(pics, segs, say) {
     var pages = [], c = document.createElement("canvas"), x = c.getContext("2d"), FONT = "'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR','Noto Sans CJK KR',sans-serif";
     var sorted = segs.slice().sort(function (a, b) { return a.t - b.t; });
+    async function page(W, H, bmp, head, lines, fs, lh, pad) {
+      var textH = lines.length ? pad * 2 + lines.length * lh : 0, hh = Math.round(lh * 1.1);
+      c.width = W; c.height = H + hh + textH;
+      x.fillStyle = "#ffffff"; x.fillRect(0, 0, c.width, c.height);
+      if (bmp) x.drawImage(bmp, 0, 0);
+      x.fillStyle = "#eef1f5"; x.fillRect(0, H, W, hh);
+      x.fillStyle = "#5a6475"; x.font = Math.round(fs * 0.8) + "px " + FONT; x.textBaseline = "middle"; x.fillText(head, pad, H + hh / 2);
+      x.fillStyle = "#16202c"; x.font = fs + "px " + FONT; x.textBaseline = "alphabetic";
+      lines.forEach(function (l, k) { x.fillText(l, pad, H + hh + pad + (k + 1) * lh - Math.round(lh * 0.3)); });
+      var jb = await new Promise(function (r) { c.toBlob(r, "image/jpeg", 0.85); });
+      pages.push({ data: jb, size: jb.size, w: c.width, h: c.height, comps: 3, label: "" });
+    }
     for (var i = 0; i < pics.length; i++) {
-      var e = pics[i], t0 = e.t || 0, t1 = i + 1 < pics.length ? (pics[i + 1].t || Infinity) : Infinity;
+      // every word lands on some page: what was said before the first photo (a dark opening, a title card) goes on the first
+      var e = pics[i], t0 = i === 0 ? -Infinity : (e.t || 0), t1 = i + 1 < pics.length ? (pics[i + 1].t || Infinity) : Infinity;
       var said = sorted.filter(function (sg) { return sg.t >= t0 - 0.5 && sg.t < t1 - 0.5; }).map(function (sg) { return "[" + clockT(sg.t) + "] " + sg.text; });
       var bmp = await createImageBitmap(e.data), W = bmp.width, H = bmp.height, fs = Math.max(16, Math.round(W / 52)), lh = Math.round(fs * 1.5), pad = Math.round(fs * 0.9);
       x.font = fs + "px " + FONT;
       var lines = []; said.forEach(function (l) { wrapText(x, l, W - pad * 2).forEach(function (w) { lines.push(w); }); });
-      if (lines.length > 90) { lines = lines.slice(0, 89); lines.push("… (이어지는 말은 대본 파일에 있어요)"); }
-      var head = Math.round(lh * 1.1), textH = lines.length ? pad * 2 + lines.length * lh : 0;
-      c.width = W; c.height = H + head + textH;
-      x.fillStyle = "#ffffff"; x.fillRect(0, 0, c.width, c.height);
-      x.drawImage(bmp, 0, 0); try { bmp.close(); } catch (er) {}
-      x.fillStyle = "#eef1f5"; x.fillRect(0, H, W, head);
-      x.fillStyle = "#5a6475"; x.font = Math.round(fs * 0.8) + "px " + FONT; x.textBaseline = "middle"; x.fillText(e.label || "", pad, H + head / 2);
-      x.fillStyle = "#16202c"; x.font = fs + "px " + FONT; x.textBaseline = "alphabetic";
-      lines.forEach(function (l, k) { x.fillText(l, pad, H + head + pad + (k + 1) * lh - Math.round(lh * 0.3)); });
-      var jb = await new Promise(function (r) { c.toBlob(r, "image/jpeg", 0.85); });
-      pages.push({ data: jb, size: jb.size, w: c.width, h: c.height, comps: 3, label: "" });
+      // a slide that stayed up a long time: its words go on as extra pages (nothing cut off)
+      var PER = 90, first = lines.slice(0, PER);
+      await page(W, H, bmp, e.label || "", first, fs, lh, pad); try { bmp.close(); } catch (er) {}
+      for (var k = PER, n = 2; k < lines.length; k += PER * 2, n++) await page(W, 0, null, (e.label || "") + "  · 이어서 (" + n + ")", lines.slice(k, k + PER * 2), fs, lh, pad);
       if (i % 5 === 4 || i === pics.length - 1) { say("PDF 만드는 중… " + (i + 1) + " / " + pics.length + "쪽 (대본 함께)"); await yieldNow(); }
     }
     return pdfStore(pages);
   }
-  // C3: the slide alone. Edges that are one flat colour in (nearly) every photo - black bars, a frame, an empty margin -
+  // C3: the slide alone. Edges that are one flat colour in every photo - black bars, a frame, an empty margin -
   // are cut off; what is left must still be most of the picture, otherwise nothing is cut.
   function findCrop(scenes, G) {
     var w = G.w, h = G.h, n = 0, rowU = new Float32Array(h), colU = new Float32Array(w);
@@ -1264,7 +1270,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       for (var x1 = 0; x1 < w; x1++) { var mn2 = 255, mx2 = 0; for (var y1 = 0; y1 < h; y1++) { var v2 = g[y1 * w + x1]; if (v2 < mn2) mn2 = v2; if (v2 > mx2) mx2 = v2; } if (mx2 - mn2 < 14) colU[x1]++; }
     });
     if (n < 2) return null;
-    var lim = n * 0.9, top = 0, bot = h - 1, lef = 0, rig = w - 1;
+    // only edges that are empty in EVERY photo: a page number or footnote that shows up on a few slides must not be cut off
+    var lim = n, top = 0, bot = h - 1, lef = 0, rig = w - 1;
     while (top < h - 1 && rowU[top] >= lim) top++; while (bot > top && rowU[bot] >= lim) bot--;
     while (lef < w - 1 && colU[lef] >= lim) lef++; while (rig > lef && colU[rig] >= lim) rig--;
     var mx3 = Math.round(w * 0.01), my = Math.round(h * 0.01);
@@ -1330,20 +1337,21 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       try { handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, liteSame ? blob : zipStore(lite)); } catch (e) { handed = false; }
     }
     // the file itself: always for plain capture and whenever the hand-over did not work; for 영상 정리 only if wanted
-    var saved = !lite || !handed || keepZipOn(), fmtSave = saveFormat(), files = [];
-    if (saved) {
-      if (fmtSave !== "pdf") { downloadFile(blob, name); files.push({ kind: "ZIP", name: name, blob: blob }); }
-      if (fmtSave !== "zip") {
-        say("PDF 만드는 중…");
-        var pdf = null, pics = full.filter(function (e) { return e.w; });
-        try { pdf = more.segs && more.segs.length ? await pdfWithWords(pics, more.segs, say) : pdfStore(pics); } catch (e) { try { pdf = pdfStore(pics); } catch (e2) {} }
-        if (pdf) {
-          // A phone shows one "download this file?" sheet at a time: a second download started while the first sheet is up
-          // replaces it, so only the PDF arrived. Wait until the first one has been answered (the page is back), then ask again.
-          if (files.length) { say("ZIP 받기를 마치면 PDF도 받아요…"); await afterDownloadPrompt(); }
-          downloadFile(pdf, name.replace(/\.zip$/, ".pdf")); files.push({ kind: "PDF", name: name.replace(/\.zip$/, ".pdf"), blob: pdf });
-        } else if (!files.length) { downloadFile(blob, name); files.push({ kind: "ZIP", name: name, blob: blob }); }
-      }
+    // ZIP: plain capture as chosen; 영상 정리 only if wanted - but always when the hand-over did not work (it is then the way
+    // to the note page). PDF: whenever the save format asks for it, in either mode.
+    var fmtSave = saveFormat(), files = [], digestJob = !!(extra && prefs.mode === "digest");
+    var saved = digestJob && !handed ? true : fmtSave !== "pdf" && (!lite || !handed || keepZipOn());
+    if (saved) { downloadFile(blob, name); files.push({ kind: "ZIP", name: name, blob: blob }); }
+    if (fmtSave !== "zip") {
+      say("PDF 만드는 중…");
+      var pdf = null, pics = full.filter(function (e) { return e.w; });
+      try { pdf = more.segs && more.segs.length ? await pdfWithWords(pics, more.segs, say) : pdfStore(pics); } catch (e) { try { pdf = pdfStore(pics); } catch (e2) {} }
+      if (pdf) {
+        // A phone shows one "download this file?" sheet at a time: a second download started while the first sheet is up
+        // replaces it, so only the PDF arrived. Wait until the first one has been answered (the page is back), then ask again.
+        if (files.length) { say("ZIP 받기를 마치면 PDF도 받아요…"); await afterDownloadPrompt(); }
+        downloadFile(pdf, name.replace(/\.zip$/, ".pdf")); files.push({ kind: "PDF", name: name.replace(/\.zip$/, ".pdf"), blob: pdf });
+      } else if (!files.length) { downloadFile(blob, name); files.push({ kind: "ZIP", name: name, blob: blob }); saved = true; }
     }
     full = null; lite = null;
     await sleep(waitMs == null ? 2500 : waitMs);
