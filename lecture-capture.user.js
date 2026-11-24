@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.24.3
+// @version      1.24.5
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -42,7 +42,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
   // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
-  try { document.documentElement.setAttribute("data-lc-cap", "1.24.3"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
+  try { document.documentElement.setAttribute("data-lc-cap", "1.24.5"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -1231,9 +1231,36 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (line.trim()) out.push(line.replace(/\s+$/, ""));
     return out;
   }
+  // Captions come in scraps that end mid-sentence (automatic ones have no full stops at all). For the PDF they are put back
+  // into sentences: every word gets its moment (spread over its scrap), and a sentence ends at a full stop or at one of the
+  // usual spoken endings (…습니다, …요, …죠, …다).
+  var S_ENDS = /(습니다|입니다|니다|어요|아요|여요|에요|예요|해요|이죠|죠|지요|거든요|네요|군요|래요|대요|세요|잖아요|구요|고요|한다|된다|이다|있다|없다|했다|였다|겠다)$/;
+  var S_ASKS = /(습니까|입니까|까요|나요|던가요|인가요)$/, S_NOT = /(필요|중요|주요|수요|개요|소요|강요|보다)$/;
+  function sentencesOf(segs, bounds) {
+    var sg = segs.filter(function (x) { return x && x.text; }).slice().sort(function (a, b) { return a.t - b.t; }), words = [];
+    sg.forEach(function (x, i) {
+      var nx = i + 1 < sg.length ? sg[i + 1].t : x.t + Math.max(3, x.text.length / 7), end = Math.min(nx, x.t + 15), w = x.text.trim().split(/\s+/);
+      w.forEach(function (tok, j) { words.push({ w: tok, t: x.t + (end - x.t) * j / w.length, last: j === w.length - 1, gap: j === w.length - 1 ? nx - end : 0, next: nx }); });
+    });
+    var out = [], cur = null;
+    function close(mark) { if (!cur) return; var tx = cur.w.join(" "); if (mark && !/[.?!。…]$/.test(tx)) tx += mark; out.push({ t0: cur.t0, t1: cur.t1, text: tx }); cur = null; }
+    words.forEach(function (wd) {
+      if (!cur) cur = { t0: wd.t, t1: wd.t, w: [] };
+      cur.w.push(wd.w); cur.t1 = wd.t + 0.6;
+      var bare = wd.w.replace(/["'”’)\]]+$/, "");
+      if (/[.?!。…]$/.test(bare)) close("");
+      else if (bare.length >= 2 && !S_NOT.test(bare) && S_ASKS.test(bare)) close("?");
+      else if (bare.length >= 2 && !S_NOT.test(bare) && S_ENDS.test(bare)) close(".");
+      else if (cur.w.join(" ").length > 220 && wd.last) close("");     // a long stretch with no ending at all: break where a scrap ends
+      else if (wd.gap > 4) close("");                                   // a long pause
+      // still no ending, but the slide changes right here: a long-enough stretch stops at the change instead of running across it
+      else if (wd.last && cur.w.join(" ").length >= 40 && (bounds || []).some(function (b) { return b > cur.t0 + 1 && b <= wd.next + 0.5 && b > wd.t - 0.5; })) close("");
+    });
+    close("");
+    return out;
+  }
   async function pdfWithWords(pics, segs, say) {
     var pages = [], c = document.createElement("canvas"), x = c.getContext("2d"), FONT = "'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR','Noto Sans CJK KR',sans-serif";
-    var sorted = segs.slice().sort(function (a, b) { return a.t - b.t; });
     async function page(W, H, bmp, head, lines, fs, lh, pad) {
       var textH = lines.length ? pad * 2 + lines.length * lh : 0, hh = Math.round(lh * 1.1);
       c.width = W; c.height = H + hh + textH;
@@ -1246,17 +1273,29 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var jb = await new Promise(function (r) { c.toBlob(r, "image/jpeg", 0.85); });
       pages.push({ data: jb, size: jb.size, w: c.width, h: c.height, comps: 3, label: "" });
     }
+    // which slide a sentence belongs to: the one it was mostly said over. A photo's time is when the change was SEEN,
+    // up to one look after it happened, so each slide is taken to start half a look earlier.
+    var lag = Math.min(1.5, (Number(prefs.every) || 1) / 2), per = pics.map(function () { return []; });
+    var sents = sentencesOf(segs, pics.slice(1).map(function (p) { return (p.t || 0) - lag; }));
+    sents.forEach(function (st) {
+      var mid = (st.t0 + st.t1) / 2, k = 0;
+      for (var i = 1; i < pics.length; i++) if (mid >= (pics[i].t || 0) - lag) k = i;
+      per[k].push(st);
+    });
     for (var i = 0; i < pics.length; i++) {
-      // every word lands on some page: what was said before the first photo (a dark opening, a title card) goes on the first
-      var e = pics[i], t0 = i === 0 ? -Infinity : (e.t || 0), t1 = i + 1 < pics.length ? (pics[i + 1].t || Infinity) : Infinity;
-      var said = sorted.filter(function (sg) { return sg.t >= t0 - 0.5 && sg.t < t1 - 0.5; }).map(function (sg) { return "[" + clockT(sg.t) + "] " + sg.text; });
-      var bmp = await createImageBitmap(e.data), W = bmp.width, H = bmp.height, fs = Math.max(16, Math.round(W / 52)), lh = Math.round(fs * 1.5), pad = Math.round(fs * 0.9);
+      var e = pics[i], bmp = await createImageBitmap(e.data), W = bmp.width, H = bmp.height, fs = Math.max(16, Math.round(W / 52)), lh = Math.round(fs * 1.5), pad = Math.round(fs * 0.9);
       x.font = fs + "px " + FONT;
-      var lines = []; said.forEach(function (l) { wrapText(x, l, W - pad * 2).forEach(function (w) { lines.push(w); }); });
+      // one running paragraph per page, with the time written at its start and again every 20 seconds or so
+      var paras = [], cur = null, lastMark = -1e9;
+      per[i].forEach(function (st) {
+        if (!cur || st.t0 - lastMark >= 20) { cur = { text: "[" + clockT(st.t0) + "] " + st.text }; paras.push(cur); lastMark = st.t0; }
+        else cur.text += " " + st.text;
+      });
+      var lines = []; paras.forEach(function (p) { wrapText(x, p.text, W - pad * 2).forEach(function (w) { lines.push(w); }); });
       // a slide that stayed up a long time: its words go on as extra pages (nothing cut off)
-      var PER = 90, first = lines.slice(0, PER);
-      await page(W, H, bmp, e.label || "", first, fs, lh, pad); try { bmp.close(); } catch (er) {}
-      for (var k = PER, n = 2; k < lines.length; k += PER * 2, n++) await page(W, 0, null, (e.label || "") + "  · 이어서 (" + n + ")", lines.slice(k, k + PER * 2), fs, lh, pad);
+      var PER = 90;
+      await page(W, H, bmp, e.label || "", lines.slice(0, PER), fs, lh, pad); try { bmp.close(); } catch (er) {}
+      for (var k2 = PER, n = 2; k2 < lines.length; k2 += PER * 2, n++) await page(W, 0, null, (e.label || "") + "  · 이어서 (" + n + ")", lines.slice(k2, k2 + PER * 2), fs, lh, pad);
       if (i % 5 === 4 || i === pics.length - 1) { say("PDF 만드는 중… " + (i + 1) + " / " + pics.length + "쪽 (대본 함께)"); await yieldNow(); }
     }
     return pdfStore(pages);
@@ -1290,6 +1329,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     } catch (e) { return b; }
   }
   function saveFormat() { return prefs.saveAs === "pdf" || prefs.saveAs === "both" ? prefs.saveAs : "zip"; }
+  // the words in the PDF: "fix" = corrected on the note page first (the PDF then comes from there), "raw" = the captions as
+  // YouTube has them, straight away, "none" = photos only
+  function pdfMode() { if (saveFormat() === "zip" || prefs.pdfWords === false || prefs.pdfWords === "0") return "none"; return prefs.pdfWords === "raw" ? "raw" : "fix"; }
+  function pdfWords() { return pdfMode() !== "none"; }
   function downloadFile(blob, name) {
     // the download link is clicked inside a hidden frame: Firefox closes the work window when this page itself "navigates" to a download
     var url = URL.createObjectURL(blob), f = null;
@@ -1306,7 +1349,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   async function saveZip(title, scenes, waitMs, extra, say, more) {
     more = more || {};
     say = say || function () {};
-    var handOver = !!(extra && prefs.mode === "digest") && await bridge();
+    var fixWanted = pdfMode() === "fix" && !!(more.segs && more.segs.length), digestMode = !!(extra && prefs.mode === "digest");
+    var handOver = (digestMode || fixWanted) && await bridge(), photoList = [];
     if (extra && prefs.mode === "digest" && !handOver) bridgeWhy = "'강의 캡처 연결' 스크립트가 응답하지 않음";
     var full = [], lite = handOver ? [] : null, liteSame = true, total = scenes.length, t0 = Date.now();
     for (var i = 0; i < scenes.length; i++) {
@@ -1316,7 +1360,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (more.crop) b = await cropJpeg(b, more.crop);
       var fname = String(i + 1).padStart(4, "0") + "_" + fmt(scenes[i].t) + ".jpg", en = await entryOf(fname, b);
       en.label = String(i + 1) + " / " + total + "   " + fmt(scenes[i].t); en.t = scenes[i].t;
-      full.push(en); if (extra) (extra.photos = extra.photos || []).push({ file: fname, t: Math.round(scenes[i].t * 10) / 10 });
+      full.push(en); photoList.push({ file: fname, t: Math.round(scenes[i].t * 10) / 10 }); if (extra) extra.photos = photoList;
       if (lite) { var lb0 = await lighter(b); if (lb0 === b) lite.push(en); else { liteSame = false; lite.push(await entryOf(fname, lb0)); } }
       if (i % 10 === 9 || i === total - 1) { say("ZIP 만드는 중… 사진 " + (i + 1) + " / " + total + "장"); await yieldNow(); }
     }
@@ -1328,6 +1372,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         transcript: tr ? { source: tr.source, lang: tr.lang, name: tr.name, segs: tr.segs } : null, photos: extra.photos || [] });
       var meta = []; if (ttxt) meta.push(await entryOf("transcript.txt", ttxt)); meta.push(await entryOf("digest-data.json", djson));
       full = full.concat(meta); if (lite) lite = lite.concat(meta);
+    } else if (lite) {
+      // plain capture, corrected PDF wanted: the package for the note page carries the words (the saved ZIP stays photos only)
+      liteSame = false;
+      var tr2 = { source: more.src || "자막", lang: "", name: "", segs: more.segs }, mt = { title: title, id: more.id || "", dur: more.dur || 0 };
+      lite = lite.concat([await entryOf("transcript.txt", transcriptText(mt, Object.assign({ ok: true }, tr2))),
+        await entryOf("digest-data.json", JSON.stringify({ kind: "lecture-capture", version: 1, title: title, id: mt.id, url: mt.id ? watchUrl(mt.id) : "", duration: mt.dur, transcript: tr2, photos: photoList }))]);
     }
     var blob = zipStore(full);
     if (DBG) console.log("[lc] zip " + full.length + " files, " + Math.round(blob.size / 1e6) + " MB in " + (Date.now() - t0) + " ms");
@@ -1335,18 +1385,22 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (lite) {
       say("정리 노트로 보내는 중…");
       // nothing needed shrinking: the very same ZIP goes to the note page (no second ZIP)
-      try { handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, liteSame ? blob : zipStore(lite)); } catch (e) { handed = false; }
+      // (what the note page should do travels in the file name: the companion script keeps only a few fixed fields)
+      var item = digestMode ? { kind: "zip", name: fixWanted ? name.replace(/\.zip$/, "_PDF.zip") : name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok), pdf: fixWanted }
+        : { kind: "zip", name: safeName(title) + "_자막교정.zip", id: more.id || "", title: title, words: true, job: "fixpdf" };
+      try { handed = await bridgePut(item, liteSame ? blob : zipStore(lite)); } catch (e) { handed = false; }
     }
     // the file itself: always for plain capture and whenever the hand-over did not work; for 영상 정리 only if wanted
     // ZIP: plain capture as chosen; 영상 정리 only if wanted - but always when the hand-over did not work (it is then the way
     // to the note page). PDF: whenever the save format asks for it, in either mode.
-    var fmtSave = saveFormat(), files = [], digestJob = !!(extra && prefs.mode === "digest");
-    var saved = digestJob && !handed ? true : fmtSave !== "pdf" && (!lite || !handed || keepZipOn());
+    var fmtSave = saveFormat(), files = [], digestJob = digestMode, fixHanded = fixWanted && handed;
+    var saved = digestJob && !handed ? true : fmtSave !== "pdf" && (!digestJob || !handed || keepZipOn());
     if (saved) { downloadFile(blob, name); files.push({ kind: "ZIP", name: name, blob: blob }); }
-    if (fmtSave !== "zip") {
+    // the corrected PDF is made on the note page; here only when that could not be arranged (then with the captions as they are)
+    if (fmtSave !== "zip" && !fixHanded) {
       say("PDF 만드는 중…");
       var pdf = null, pics = full.filter(function (e) { return e.w; });
-      try { pdf = more.segs && more.segs.length ? await pdfWithWords(pics, more.segs, say) : pdfStore(pics); } catch (e) { try { pdf = pdfStore(pics); } catch (e2) {} }
+      try { pdf = more.segs && more.segs.length && pdfWords() ? await pdfWithWords(pics, more.segs, say) : pdfStore(pics); } catch (e) { try { pdf = pdfStore(pics); } catch (e2) {} }
       if (pdf) {
         // A phone shows one "download this file?" sheet at a time: a second download started while the first sheet is up
         // replaces it, so only the PDF arrived. Wait until the first one has been answered (the page is back), then ask again.
@@ -1356,7 +1410,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
     full = null; lite = null;
     await sleep(waitMs == null ? 2500 : waitMs);
-    return { handed: handed, saved: saved, files: files, why: handed ? "" : bridgeWhy };
+    return { handed: handed, saved: saved, files: files, fixHanded: fixHanded, fixWanted: fixWanted, why: handed ? "" : bridgeWhy };
   }
 
   // ---------- panel (shadow DOM, no innerHTML: YouTube enforces Trusted Types) ----------
@@ -1434,7 +1488,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "merge" }), h("span", { text: "내용이 덧붙기만 하면 완성된 한 장만 남기기" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "subs" }), h("span", { text: "대본(자막)도 ZIP에 함께 넣기" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "fastShot" }), h("span", { text: "빠르게 찍기: 화질 720p 이하일 때 장면을 찾으면서 바로 찍어요(사진 찍는 단계가 없어져요. 폰에서 더 빠른지 비교해 보세요)" })]),
-        h("div", { class: "r" }, [h("label", {}, ["사진 저장 형식", h("select", { id: "saveAs" }, [opt("zip", "ZIP (사진 파일 묶음)"), opt("pdf", "PDF (사진 아래에 그때 한 말까지)"), opt("both", "ZIP + PDF 둘 다")])])]),
+        h("div", { class: "r" }, [h("label", {}, ["사진 저장 형식", h("select", { id: "saveAs" }, [opt("zip", "ZIP (사진 파일 묶음)"), opt("pdf", "PDF (한 파일로 넘겨 보기)"), opt("both", "ZIP + PDF 둘 다")])])]),
+        h("div", { class: "r", id: "pdfWordsRow" }, [h("label", {}, ["PDF 내용", h("select", { id: "pdfWords" }, [opt("fix", "사진 + 그 장면에서 한 말 · 오타 교정(정리 노트에서, 추천)"), opt("raw", "사진 + 자막 원문 그대로(바로 받기)"), opt("0", "캡처 사진만")])])]),
         h("label", { class: "c" }, [h("input", { type: "checkbox", id: "crop" }), h("span", { text: "슬라이드 부분만 남기기 (모든 사진에 공통인 검은 띠·테두리·빈 여백을 잘라내요)" })]),
         h("label", { class: "c digOnly" }, [h("input", { type: "checkbox", id: "keepZip" }), h("span", { text: "정리 자료 ZIP도 다운로드 폴더에 저장 (정리 노트로 자동 전달되면 없어도 돼요. 전달이 안 되면 늘 저장해요)" })]),
         h("button", { id: "go", text: "캡처 시작" }),
@@ -1449,7 +1504,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
     $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
     $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
-    $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat(); $("crop").checked = !!prefs.crop;
+    $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat(); $("crop").checked = !!prefs.crop; $("pdfWords").value = prefs.pdfWords === false || prefs.pdfWords === "0" ? "0" : prefs.pdfWords === "raw" ? "raw" : "fix"; $("pdfWordsRow").style.display = saveFormat() === "zip" ? "none" : "";
     function applyMode() {
       var dig = prefs.mode === "digest";
       $("modeCap").checked = !dig; $("modeDig").checked = dig; $("digNote").style.display = dig ? "" : "none";
@@ -1463,14 +1518,15 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function setOpen(o) { prefs.open = o; $("bd").style.display = o ? "" : "none"; $("fold").textContent = o ? "▾" : "▸"; savePrefs(); }
     setOpen(prefs.open !== false);
     $("hd").addEventListener("click", function () { setOpen(!prefs.open); });
-    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip", "fastShot", "saveAs", "crop"].forEach(function (id) {
+    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip", "fastShot", "saveAs", "crop", "pdfWords"].forEach(function (id) {
       $(id).addEventListener("change", function () { readPrefs(); savePrefs(); });
     });
     function readPrefs() {
       prefs.workers = Number($("workers").value); prefs.quality = $("quality").value; prefs.minPx = Number($("sens").value);
       prefs.ignoreMoving = $("moving").checked; prefs.merge = $("merge").checked; prefs.ignoreCaptions = !$("caps").checked;
       prefs.every = fixEvery($("every").value); prefs.dedup = $("dedup").checked; prefs.subs = $("subs").checked; prefs.keepZip = $("keepZip").checked;
-      prefs.fastShot = $("fastShot").checked; prefs.saveAs = $("saveAs").value; prefs.crop = $("crop").checked;
+      prefs.fastShot = $("fastShot").checked; prefs.saveAs = $("saveAs").value; prefs.crop = $("crop").checked; prefs.pdfWords = $("pdfWords").value === "0" ? false : $("pdfWords").value;
+      $("pdfWordsRow").style.display = prefs.saveAs === "zip" ? "none" : "";
     }
     return {
       $: $, readPrefs: readPrefs, applyMode: applyMode, root: root,
@@ -1493,12 +1549,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
         $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
         $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
-        $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat(); $("crop").checked = !!prefs.crop;
+        $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat(); $("crop").checked = !!prefs.crop; $("pdfWords").value = prefs.pdfWords === false || prefs.pdfWords === "0" ? "0" : prefs.pdfWords === "raw" ? "raw" : "fix"; $("pdfWordsRow").style.display = saveFormat() === "zip" ? "none" : "";
         applyMode();
       }
     };
   }
-  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip, fastShot: prefs.fastShot, saveAs: prefs.saveAs, crop: prefs.crop }; }
+  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip, fastShot: prefs.fastShot, saveAs: prefs.saveAs, crop: prefs.crop, pdfWords: prefs.pdfWords }; }
   function jobPrefs() { return Object.assign(pickPrefs(), userSet || {}); }
 
   // =====================================================================
@@ -1943,8 +1999,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       // 영상 정리: everything saved and every video has its words: go on to the note page by itself
       var allWords = results.every(function (x) { return x.status !== "done" || /^대본 \d/.test(x.subsInfo || ""); });
       if (prefs.mode === "digest" && n && !soloOpen && !noReadAll && allWords) goDigestSoon();
+      else if (prefs.mode !== "digest" && results.some(function (x) { return x.fixHanded; }) && !soloOpen && !noReadAll) goDigestSoon(true);
     }
-    function goDigestSoon() {
+    function goDigestSoon(fixOnly) {
       var left = 6, cancel = false, li = h("li", { style: "list-style:none;margin:8px 0 0 -16px;font-size:12px;color:var(--fg)" }), sp = h("span", {});
       var b = h("button", { text: "여기 머무르기", style: "margin-left:8px;padding:3px 8px;font-size:11px;background:var(--bg);color:var(--ac)" });
       b.addEventListener("click", function () { cancel = true; li.remove(); });
@@ -1952,7 +2009,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       (function tick() {
         if (cancel) return;
         if (left <= 0) { location.href = DIGEST_URL; return; }
-        sp.textContent = left + "초 뒤 정리 노트 페이지로 넘어가요. " + (results.some(function (x) { return x.handed; }) ? "자료는 자동으로 넘어가서 바로 정리돼요." : "거기서 방금 받은 ZIP을 고르기만 하면 돼요."); left--;
+        sp.textContent = left + "초 뒤 정리 노트 페이지로 넘어가요. " + (fixOnly ? "거기서 자막 오타를 고친 PDF를 만들어 저장해요(저장 확인을 한 번 눌러 주세요)." : results.some(function (x) { return x.handed; }) ? "자료는 자동으로 넘어가서 바로 정리돼요." : "거기서 방금 받은 ZIP을 고르기만 하면 돼요."); left--;
         setTimeout(tick, 1000);
       })();
     }
@@ -2094,7 +2151,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         return "stuck";
       }
       var r0 = players[0].ready; title = r0.title || id; w = r0.w; hgt = r0.h; res.title = title;
-      if ((prefs.subs !== false || saveFormat() !== "zip") && !res.subsP) res.subsP = askSubs(players[0], id);   // (the PDF puts the words under each photo)
+      if ((prefs.subs !== false || pdfWords()) && !res.subsP) res.subsP = askSubs(players[0], id);   // (the PDF puts the words under each photo)
       dur = 0; players.forEach(function (P) { var d = Number(P.ready && P.ready.dur); if (isFinite(d) && d > dur) dur = d; });
       if (!(dur > 0)) {
         // no player could tell how long the video is: nothing can be planned. Try once more, then leave it for later.
@@ -2347,10 +2404,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         if (!two) res.note = "찾으며 찍기 " + clock(findSecs) + (findSecs > 3 && findLen > 30 ? "(평균 " + (findLen / findSecs).toFixed(1) + "배속, 플레이어 최대 " + mostPlayers + "개)" : "");
       ui.status(label, res.subsP ? "대본을 마저 받는 중… (최대 30초)" : "ZIP 만드는 중…");
         var trn = res.subsP ? await Promise.race([res.subsP, bsleep(30000).then(function () { return null; })]) : null;
-        if (!(trn && trn.ok) && (prefs.subs !== false || saveFormat() !== "zip")) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
+        if (!(trn && trn.ok) && (prefs.subs !== false || pdfWords())) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
         if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
-        var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null, function (t) { ui.status(label, t); }, { segs: trn && trn.ok ? trn.segs : null, crop: cropBox });
-        res.handed = !!(sv && sv.handed); res.handWhy = sv && sv.why || ""; res.zipSaved = !sv || sv.saved !== false;
+        var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null, function (t) { ui.status(label, t); }, { segs: trn && trn.ok ? trn.segs : null, src: trn && trn.ok ? trn.source : "", id: id, dur: dur, crop: cropBox });
+        res.handed = !!(sv && sv.handed); res.handWhy = sv && sv.why || ""; res.zipSaved = !sv || sv.saved !== false; res.fixHanded = !!(sv && sv.fixHanded);
+      if (prefs.mode !== "digest" && sv && sv.fixWanted) res.note = [res.note, sv.fixHanded ? "교정된 자막 PDF는 정리 노트에서 받아요" : "자막 교정 안 됨(" + (sv.why || "?") + ") · 원문 자막 PDF로 저장"].filter(Boolean).join(" · ");
         // the files stay on hand for the two latest videos, so a download the browser dropped can be asked for again with a tap
         res.files = sv && sv.files && sv.files.length ? sv.files : null; keptFiles.push(res); while (keptFiles.length > 2) { var old = keptFiles.shift(); old.files = null; }
         res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" + (trn && trn.why ? "(" + String(trn.why).slice(0, 60) + ")" : "") : "";
