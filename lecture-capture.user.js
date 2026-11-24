@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.23.0
+// @version      1.24.0
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -42,7 +42,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
   // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
-  try { document.documentElement.setAttribute("data-lc-cap", "1.23.0"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
+  try { document.documentElement.setAttribute("data-lc-cap", "1.24.0"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -1195,18 +1195,91 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     xref[2] = off; add("2 0 obj\n<< /Type /Pages /Count " + N + " /Kids [" + pages.map(function (p, i) { return (FIRST + i * 3) + " 0 R"; }).join(" ") + "] >>\nendobj\n");
     xref[3] = off; add("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
     pages.forEach(function (p, i) {
-      var pn = FIRST + i * 3, im = pn + 1, ct = pn + 2, W = p.w, H = p.h, bar = Math.max(18, Math.round(H * 0.03)), fs = Math.round(bar * 0.6);
+      var pn = FIRST + i * 3, im = pn + 1, ct = pn + 2, W = p.w, H = p.h, bar = p.label ? Math.max(18, Math.round(H * 0.03)) : 0, fs = Math.round(bar * 0.6);
       var label = (p.label || "").replace(/[^\x20-\x7e]/g, "").replace(/[()\\]/g, "");
       xref[pn] = off; add(pn + " 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + W + " " + (H + bar) + "] /Resources << /XObject << /Im0 " + im + " 0 R >> /Font << /F1 3 0 R >> >> /Contents " + ct + " 0 R >>\nendobj\n");
       xref[im] = off; add(im + " 0 obj\n<< /Type /XObject /Subtype /Image /Width " + W + " /Height " + H + " /ColorSpace /" + (p.comps === 1 ? "DeviceGray" : p.comps === 4 ? "DeviceCMYK" : "DeviceRGB") + " /BitsPerComponent 8 /Filter /DCTDecode /Length " + p.size + " >>\nstream\n");
       add(p); add("\nendstream\nendobj\n");
-      var c = "q " + W + " 0 0 " + H + " 0 " + bar + " cm /Im0 Do Q BT /F1 " + fs + " Tf " + Math.round(bar * 0.4) + " " + Math.round(bar * 0.3) + " Td (" + label + ") Tj ET";
+      var c = "q " + W + " 0 0 " + H + " 0 " + bar + " cm /Im0 Do Q" + (label ? " BT /F1 " + fs + " Tf " + Math.round(bar * 0.4) + " " + Math.round(bar * 0.3) + " Td (" + label + ") Tj ET" : "");
       xref[ct] = off; add(ct + " 0 obj\n<< /Length " + enc.encode(c).length + " >>\nstream\n" + c + "\nendstream\nendobj\n");
     });
     var total = FIRST + N * 3, xo = off, x = "xref\n0 " + total + "\n0000000000 65535 f \n";
     for (var k = 1; k < total; k++) x += String(xref[k]).padStart(10, "0") + " 00000 n \n";
     add(x + "trailer\n<< /Size " + total + " /Root 1 0 R >>\nstartxref\n" + xo + "\n%%EOF\n");
     return new Blob(parts, { type: "application/pdf" });
+  }
+  // after starting a download: on a phone the browser's question covers the page (it counts as hidden) until it is
+  // answered; wait for that, then a moment more. Where nothing covers the page this is just a short pause.
+  async function afterDownloadPrompt() {
+    await sleep(1200);
+    var t0 = Date.now(); while (document.hidden && Date.now() - t0 < 180000) await sleep(300);
+    await sleep(IS_MOBILE ? 1500 : 600);
+  }
+  // C1: a PDF page per photo with what was said while that screen was up, written under it (drawn as one picture, so
+  // Korean needs no embedded font)
+  function wrapText(x, text, maxW) {
+    var out = [], line = "";
+    String(text).split(/(\s+)/).forEach(function (tok) {
+      if (!tok) return;
+      if (x.measureText(line + tok).width <= maxW) { line += tok; return; }
+      if (line.trim()) { out.push(line.replace(/\s+$/, "")); line = ""; }
+      tok = tok.replace(/^\s+/, "");
+      while (tok && x.measureText(tok).width > maxW) { var k = tok.length; while (k > 1 && x.measureText(tok.slice(0, k)).width > maxW) k--; out.push(tok.slice(0, k)); tok = tok.slice(k); }
+      line = tok;
+    });
+    if (line.trim()) out.push(line.replace(/\s+$/, ""));
+    return out;
+  }
+  async function pdfWithWords(pics, segs, say) {
+    var pages = [], c = document.createElement("canvas"), x = c.getContext("2d"), FONT = "'Malgun Gothic','Apple SD Gothic Neo','Noto Sans KR','Noto Sans CJK KR',sans-serif";
+    var sorted = segs.slice().sort(function (a, b) { return a.t - b.t; });
+    for (var i = 0; i < pics.length; i++) {
+      var e = pics[i], t0 = e.t || 0, t1 = i + 1 < pics.length ? (pics[i + 1].t || Infinity) : Infinity;
+      var said = sorted.filter(function (sg) { return sg.t >= t0 - 0.5 && sg.t < t1 - 0.5; }).map(function (sg) { return "[" + clockT(sg.t) + "] " + sg.text; });
+      var bmp = await createImageBitmap(e.data), W = bmp.width, H = bmp.height, fs = Math.max(16, Math.round(W / 52)), lh = Math.round(fs * 1.5), pad = Math.round(fs * 0.9);
+      x.font = fs + "px " + FONT;
+      var lines = []; said.forEach(function (l) { wrapText(x, l, W - pad * 2).forEach(function (w) { lines.push(w); }); });
+      if (lines.length > 90) { lines = lines.slice(0, 89); lines.push("… (이어지는 말은 대본 파일에 있어요)"); }
+      var head = Math.round(lh * 1.1), textH = lines.length ? pad * 2 + lines.length * lh : 0;
+      c.width = W; c.height = H + head + textH;
+      x.fillStyle = "#ffffff"; x.fillRect(0, 0, c.width, c.height);
+      x.drawImage(bmp, 0, 0); try { bmp.close(); } catch (er) {}
+      x.fillStyle = "#eef1f5"; x.fillRect(0, H, W, head);
+      x.fillStyle = "#5a6475"; x.font = Math.round(fs * 0.8) + "px " + FONT; x.textBaseline = "middle"; x.fillText(e.label || "", pad, H + head / 2);
+      x.fillStyle = "#16202c"; x.font = fs + "px " + FONT; x.textBaseline = "alphabetic";
+      lines.forEach(function (l, k) { x.fillText(l, pad, H + head + pad + (k + 1) * lh - Math.round(lh * 0.3)); });
+      var jb = await new Promise(function (r) { c.toBlob(r, "image/jpeg", 0.85); });
+      pages.push({ data: jb, size: jb.size, w: c.width, h: c.height, comps: 3, label: "" });
+      if (i % 5 === 4 || i === pics.length - 1) { say("PDF 만드는 중… " + (i + 1) + " / " + pics.length + "쪽 (대본 함께)"); await yieldNow(); }
+    }
+    return pdfStore(pages);
+  }
+  // C3: the slide alone. Edges that are one flat colour in (nearly) every photo - black bars, a frame, an empty margin -
+  // are cut off; what is left must still be most of the picture, otherwise nothing is cut.
+  function findCrop(scenes, G) {
+    var w = G.w, h = G.h, n = 0, rowU = new Float32Array(h), colU = new Float32Array(w);
+    scenes.forEach(function (sc) {
+      var g = sc.sig && sc.sig.g; if (!g || g.length < w * h) return; n++;
+      for (var y = 0; y < h; y++) { var mn = 255, mx = 0; for (var x0 = 0; x0 < w; x0++) { var v = g[y * w + x0]; if (v < mn) mn = v; if (v > mx) mx = v; } if (mx - mn < 14) rowU[y]++; }
+      for (var x1 = 0; x1 < w; x1++) { var mn2 = 255, mx2 = 0; for (var y1 = 0; y1 < h; y1++) { var v2 = g[y1 * w + x1]; if (v2 < mn2) mn2 = v2; if (v2 > mx2) mx2 = v2; } if (mx2 - mn2 < 14) colU[x1]++; }
+    });
+    if (n < 2) return null;
+    var lim = n * 0.9, top = 0, bot = h - 1, lef = 0, rig = w - 1;
+    while (top < h - 1 && rowU[top] >= lim) top++; while (bot > top && rowU[bot] >= lim) bot--;
+    while (lef < w - 1 && colU[lef] >= lim) lef++; while (rig > lef && colU[rig] >= lim) rig--;
+    var mx3 = Math.round(w * 0.01), my = Math.round(h * 0.01);
+    top = Math.max(0, top - my); bot = Math.min(h - 1, bot + my); lef = Math.max(0, lef - mx3); rig = Math.min(w - 1, rig + mx3);
+    var area = (bot - top + 1) * (rig - lef + 1) / (w * h);
+    if (area > 0.95 || area < 0.35) return null;
+    return { x0: lef / w, y0: top / h, x1: (rig + 1) / w, y1: (bot + 1) / h };
+  }
+  async function cropJpeg(b, box) {
+    try {
+      var bmp = await createImageBitmap(b), sx = Math.round(box.x0 * bmp.width), sy = Math.round(box.y0 * bmp.height), sw = Math.round((box.x1 - box.x0) * bmp.width), sh = Math.round((box.y1 - box.y0) * bmp.height);
+      var c = document.createElement("canvas"); c.width = sw; c.height = sh; c.getContext("2d").drawImage(bmp, sx, sy, sw, sh, 0, 0, sw, sh); try { bmp.close(); } catch (e) {}
+      var o = await new Promise(function (r) { c.toBlob(r, "image/jpeg", 0.92); });
+      return o || b;
+    } catch (e) { return b; }
   }
   function saveFormat() { return prefs.saveAs === "pdf" || prefs.saveAs === "both" ? prefs.saveAs : "zip"; }
   function downloadFile(blob, name) {
@@ -1222,7 +1295,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     }
     setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
   }
-  async function saveZip(title, scenes, waitMs, extra, say) {
+  async function saveZip(title, scenes, waitMs, extra, say, more) {
+    more = more || {};
     say = say || function () {};
     var handOver = !!(extra && prefs.mode === "digest") && await bridge();
     if (extra && prefs.mode === "digest" && !handOver) bridgeWhy = "'강의 캡처 연결' 스크립트가 응답하지 않음";
@@ -1231,8 +1305,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var b = await scenes[i].blobP;
       if (!b) continue;
       if (!(b instanceof Blob)) { try { b = new Blob([b], { type: "image/jpeg" }); } catch (e) { continue; } }
+      if (more.crop) b = await cropJpeg(b, more.crop);
       var fname = String(i + 1).padStart(4, "0") + "_" + fmt(scenes[i].t) + ".jpg", en = await entryOf(fname, b);
-      en.label = String(i + 1) + " / " + total + "   " + fmt(scenes[i].t);
+      en.label = String(i + 1) + " / " + total + "   " + fmt(scenes[i].t); en.t = scenes[i].t;
       full.push(en); if (extra) (extra.photos = extra.photos || []).push({ file: fname, t: Math.round(scenes[i].t * 10) / 10 });
       if (lite) { var lb0 = await lighter(b); if (lb0 === b) lite.push(en); else { liteSame = false; lite.push(await entryOf(fname, lb0)); } }
       if (i % 10 === 9 || i === total - 1) { say("ZIP 만드는 중… 사진 " + (i + 1) + " / " + total + "장"); await yieldNow(); }
@@ -1255,14 +1330,24 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       try { handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, liteSame ? blob : zipStore(lite)); } catch (e) { handed = false; }
     }
     // the file itself: always for plain capture and whenever the hand-over did not work; for 영상 정리 only if wanted
-    var saved = !lite || !handed || keepZipOn(), fmtSave = saveFormat();
+    var saved = !lite || !handed || keepZipOn(), fmtSave = saveFormat(), files = [];
     if (saved) {
-      if (fmtSave !== "pdf") downloadFile(blob, name);
-      if (fmtSave !== "zip") { say("PDF 만드는 중…"); try { downloadFile(pdfStore(full.filter(function (e) { return e.w; })), name.replace(/\.zip$/, ".pdf")); } catch (e) { downloadFile(blob, name); } }
+      if (fmtSave !== "pdf") { downloadFile(blob, name); files.push({ kind: "ZIP", name: name, blob: blob }); }
+      if (fmtSave !== "zip") {
+        say("PDF 만드는 중…");
+        var pdf = null, pics = full.filter(function (e) { return e.w; });
+        try { pdf = more.segs && more.segs.length ? await pdfWithWords(pics, more.segs, say) : pdfStore(pics); } catch (e) { try { pdf = pdfStore(pics); } catch (e2) {} }
+        if (pdf) {
+          // A phone shows one "download this file?" sheet at a time: a second download started while the first sheet is up
+          // replaces it, so only the PDF arrived. Wait until the first one has been answered (the page is back), then ask again.
+          if (files.length) { say("ZIP 받기를 마치면 PDF도 받아요…"); await afterDownloadPrompt(); }
+          downloadFile(pdf, name.replace(/\.zip$/, ".pdf")); files.push({ kind: "PDF", name: name.replace(/\.zip$/, ".pdf"), blob: pdf });
+        } else if (!files.length) { downloadFile(blob, name); files.push({ kind: "ZIP", name: name, blob: blob }); }
+      }
     }
     full = null; lite = null;
     await sleep(waitMs == null ? 2500 : waitMs);
-    return { handed: handed, saved: saved, why: handed ? "" : bridgeWhy };
+    return { handed: handed, saved: saved, files: files, why: handed ? "" : bridgeWhy };
   }
 
   // ---------- panel (shadow DOM, no innerHTML: YouTube enforces Trusted Types) ----------
@@ -1340,7 +1425,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "merge" }), h("span", { text: "내용이 덧붙기만 하면 완성된 한 장만 남기기" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "subs" }), h("span", { text: "대본(자막)도 ZIP에 함께 넣기" })]),
         h("label", { class: "c" }, [h("input", { type: "checkbox", id: "fastShot" }), h("span", { text: "빠르게 찍기: 화질 720p 이하일 때 장면을 찾으면서 바로 찍어요(사진 찍는 단계가 없어져요. 폰에서 더 빠른지 비교해 보세요)" })]),
-        h("div", { class: "r" }, [h("label", {}, ["사진 저장 형식", h("select", { id: "saveAs" }, [opt("zip", "ZIP (사진 파일 묶음)"), opt("pdf", "PDF (한 파일로 넘겨 보기)"), opt("both", "ZIP + PDF 둘 다")])])]),
+        h("div", { class: "r" }, [h("label", {}, ["사진 저장 형식", h("select", { id: "saveAs" }, [opt("zip", "ZIP (사진 파일 묶음)"), opt("pdf", "PDF (사진 아래에 그때 한 말까지)"), opt("both", "ZIP + PDF 둘 다")])])]),
+        h("label", { class: "c" }, [h("input", { type: "checkbox", id: "crop" }), h("span", { text: "슬라이드 부분만 남기기 (모든 사진에 공통인 검은 띠·테두리·빈 여백을 잘라내요)" })]),
         h("label", { class: "c digOnly" }, [h("input", { type: "checkbox", id: "keepZip" }), h("span", { text: "정리 자료 ZIP도 다운로드 폴더에 저장 (정리 노트로 자동 전달되면 없어도 돼요. 전달이 안 되면 늘 저장해요)" })]),
         h("button", { id: "go", text: "캡처 시작" }),
         h("div", { class: "st", id: "st" }),
@@ -1354,7 +1440,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
     $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
     $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
-    $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat();
+    $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat(); $("crop").checked = !!prefs.crop;
     function applyMode() {
       var dig = prefs.mode === "digest";
       $("modeCap").checked = !dig; $("modeDig").checked = dig; $("digNote").style.display = dig ? "" : "none";
@@ -1368,14 +1454,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function setOpen(o) { prefs.open = o; $("bd").style.display = o ? "" : "none"; $("fold").textContent = o ? "▾" : "▸"; savePrefs(); }
     setOpen(prefs.open !== false);
     $("hd").addEventListener("click", function () { setOpen(!prefs.open); });
-    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip", "fastShot", "saveAs"].forEach(function (id) {
+    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip", "fastShot", "saveAs", "crop"].forEach(function (id) {
       $(id).addEventListener("change", function () { readPrefs(); savePrefs(); });
     });
     function readPrefs() {
       prefs.workers = Number($("workers").value); prefs.quality = $("quality").value; prefs.minPx = Number($("sens").value);
       prefs.ignoreMoving = $("moving").checked; prefs.merge = $("merge").checked; prefs.ignoreCaptions = !$("caps").checked;
       prefs.every = fixEvery($("every").value); prefs.dedup = $("dedup").checked; prefs.subs = $("subs").checked; prefs.keepZip = $("keepZip").checked;
-      prefs.fastShot = $("fastShot").checked; prefs.saveAs = $("saveAs").value;
+      prefs.fastShot = $("fastShot").checked; prefs.saveAs = $("saveAs").value; prefs.crop = $("crop").checked;
     }
     return {
       $: $, readPrefs: readPrefs, applyMode: applyMode, root: root,
@@ -1390,6 +1476,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         list.forEach(function (x) {
           var li = h("li", { class: x.cls, text: x.text }); ol.appendChild(li);
           if (x.lw) li.appendChild(liveWikiButton(x.lw));
+          if (x.files) { var fb = h("div", { style: "display:flex;gap:6px;flex-wrap:wrap;margin:4px 0 2px" }); x.files.forEach(function (f) { var b = h("button", { text: f.kind + " 다시 받기", style: "padding:4px 8px;font-size:11px;background:var(--bg);color:var(--ac)" }); b.title = f.name; b.addEventListener("click", function () { downloadFile(f.blob, f.name); }); fb.appendChild(b); }); li.appendChild(fb); }
         });
         if (prefs.mode === "digest" && list.some(function (x) { return x.cls === "ok"; })) ol.appendChild(digestLink("정리자료 ZIP을 넣어 영상 정리 노트 만들기 →"));
       },
@@ -1397,12 +1484,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
         $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
         $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
-        $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat();
+        $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat(); $("crop").checked = !!prefs.crop;
         applyMode();
       }
     };
   }
-  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip, fastShot: prefs.fastShot, saveAs: prefs.saveAs }; }
+  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip, fastShot: prefs.fastShot, saveAs: prefs.saveAs, crop: prefs.crop }; }
   function jobPrefs() { return Object.assign(pickPrefs(), userSet || {}); }
 
   // =====================================================================
@@ -1528,6 +1615,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // =====================================================================
   function hostRole() {
     var preSubs = {};   // transcripts handed over by the YouTube tab, by video id
+    var keptFiles = [];  // results whose saved files are still held for '다시 받기'
     var hasPip = !!(window.documentPictureInPicture && window.documentPictureInPicture.requestWindow);
     var FF_ANDROID = /Android/i.test(navigator.userAgent || "") && /Firefox\//i.test(navigator.userAgent || "");
     var pipNote0 = hasPip; try { if (localStorage.getItem("lcNoPip")) pipNote0 = false; } catch (e) {}
@@ -1536,7 +1624,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       pipNote0 ? "작은 작업 창이 열리고 거기서 진행돼요. 그 창만 떠 있으면 이 창은 최소화해도 돼요. 끝나면 이 탭이 정리 노트 페이지로 넘어가요(대본 없는 영상이 있으면 LiveWiki 버튼이 먼저 나와요)."
       : "화면 위쪽 플레이어로 진행돼요. 이 화면이 보이는 동안 진행되고, 다른 앱에 다녀와도 이어서 해요. 끝나면 이 탭이 정리 노트 페이지로 넘어가요(대본 없는 영상이 있으면 LiveWiki 버튼이 먼저 나와요).");
     if (FF_ANDROID) ui.status("안드로이드 파이어폭스에서는 안 돼요.", "이 브라우저는 유튜브 영상 화면을 읽지 못해요(브라우저 제한). Microsoft Edge 앱에 Tampermonkey를 설치해서 써 주세요.");
-    var $ = ui.$, running = false, results = [], stage = null, waiters = {}, pip = null, pipNote = null, closingPip = false;
+    var $ = ui.$, running = false, results = [], stages = [], waiters = {}, pip = null, pipNote = null, closingPip = false;
     // a steady clock that keeps ticking while this tab is hidden or minimized
     var ticker = null, tickers = [];
     function bsleep(ms) {
@@ -1557,7 +1645,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       ui.results(results.map(function (x) {
         var cls = x.status === "done" ? "ok" : x.status === "wait" ? "wait" : "bad";
         var t = (x.title || x.id) + " · " + (x.status === "done" ? "사진 " + x.count + "장" + (x.secs ? " (" + mins(x.secs).replace("약 ", "") + ")" : "") + (x.note ? " · " + x.note : "") : x.msg);
-        return { cls: cls, text: t, lw: prefs.mode === "digest" && x.status === "done" && x.subsInfo && !/^대본 \d/.test(x.subsInfo) ? x.id : null };
+        return { cls: cls, text: t, lw: prefs.mode === "digest" && x.status === "done" && x.subsInfo && !/^대본 \d/.test(x.subsInfo) ? x.id : null, files: x.files || null };
       }));
     }
     refresh();
@@ -1587,7 +1675,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       d.body.appendChild(pipNote);
       w.addEventListener("message", onMessage);
       w.addEventListener("pagehide", function (ev) { if (ev && ev.target && ev.target !== w.document) return;   // a frame inside it unloading (Firefox reports those here too)
-        pip = null; pipNote = null; stage = null; if (closingPip) { closingPip = false; return; } if (running) { stopReq = true; refresh(); ui.status("작업 창이 닫혀서 멈췄어요.", "다시 하려면 '캡처 시작'을 누르세요."); } });
+        pip = null; pipNote = null; stages.forEach(function (st) { st.alive = false; }); stages = []; if (closingPip) { closingPip = false; return; } if (running) { stopReq = true; refresh(); ui.status("작업 창이 닫혀서 멈췄어요.", "다시 하려면 '캡처 시작'을 누르세요."); } });
       return w;
     }
 
@@ -1656,9 +1744,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // and inside the visible area (browsers stop drawing players that are scrolled out of sight, and phones are narrow).
     var STAGE_URL = HOST_URL + "?lc-stage=1";
     var usePip = true;
+    // Each job (finding the scenes of one video, taking the photos of another) gets a player area of its own, so the
+    // photos of one video can be taken while the next one is already being searched (PC).
     async function openStage() {
-      closeStage();
-      var holder = null, doc = document;
+      var holder = null, doc = document, stage;
       if (pip && usePip) {
         holder = pip.document.createElement("iframe");
         holder.style.cssText = "flex:1;min-height:0;width:100%;border:0;background:#0f0f0f";
@@ -1676,12 +1765,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       var narrow = (window.innerWidth || 1000) < 700;
       stage = doc.createElement("div");
-      stage.id = "lecture-capture-stage";
-      stage.style.cssText = (holder ? "height:100%;" : narrow ? "position:fixed;left:0;right:0;top:0;height:min(42vh,62vw);z-index:2147482999;" :
+      stage.className = "lecture-capture-stage";
+      stage.style.cssText = (holder ? "height:100%;" : stages.length ? "position:fixed;left:16px;right:352px;bottom:16px;height:40vh;z-index:2147483000;border-radius:12px;" : narrow ? "position:fixed;left:0;right:0;top:0;height:min(42vh,62vw);z-index:2147482999;" :
         "position:fixed;left:16px;top:16px;right:352px;bottom:16px;z-index:2147482999;border-radius:12px;") +
         "box-sizing:border-box;background:#0f0f0f;display:flex;flex-direction:column;gap:4px;padding:4px;overflow:hidden";
       stage.holder = holder;
-      var per = doc.createElement("div"); per.id = "lc-per";
+      var per = doc.createElement("div"); per.className = "lc-per";
       per.style.cssText = "flex:none;color:#9AA4B5;font:11px system-ui;padding:0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
       per.textContent = "플레이어 준비 중…";
       var area = doc.createElement("div");
@@ -1693,8 +1782,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         area.appendChild(slot); return slot;
       };
       doc.body.appendChild(stage);
+      stage.per = per; stage.alive = true; stages.push(stage);
+      return stage;
     }
-    function closeStage() { if (stage) { if (stage.holder) stage.holder.remove(); stage.remove(); stage = null; } }
+    // one area, or (no argument) all of them
+    function closeStage(st) {
+      (st ? [st] : stages.slice()).forEach(function (x) { if (!x) return; x.alive = false; try { if (x.holder) x.holder.remove(); x.remove(); } catch (e) {} stages = stages.filter(function (y) { return y !== x; }); });
+    }
 
     // one embedded player; resolves with its "ready" message, or null (with the reason) if YouTube refuses to play it here
     var sessionCap = 0, runSafe = 0, embedsWorked = false;
@@ -1702,7 +1796,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // only what happens in this run (a crash, YouTube slowing down) holds it back. The old stored ceiling is dropped.
     try { localStorage.removeItem(SKEY); } catch (e) {}
     var openEpoch = 0;   // bumped when the browser has thrown the players out: whoever is still waiting for one stops waiting
-    function openPlayer(slot, id, job, k, onMsg, q) {
+    function openPlayer(slot, id, job, k, onMsg, q, stg) {
       return new Promise(function (resolve) {
         var key = job + "-" + k, settled = false, ep = openEpoch;
         var f = slot.ownerDocument.createElement("iframe");
@@ -1725,7 +1819,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             if (held()) { helloBy += 500; deadline += 500; continue; }
             if (ep !== openEpoch) { f.remove(); finish({ error: "응답 없음" }); continue; }
             if (!hello && Date.now() > helloBy) { f.remove(); finish({ error: "blocked" }); }
-            else if (stopReq || !stage || Date.now() > deadline) { f.remove(); finish({ error: hello ? "준비 안 됨" : "timeout" }); }
+            else if (stopReq || !(stg && stg.alive) || Date.now() > deadline) { f.remove(); finish({ error: hello ? "준비 안 됨" : "timeout" }); }
           }
         })();
       });
@@ -1772,9 +1866,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (!prev) { await dbDelAll("seg:"); await dbDelAll("pic:"); await dbDelAll("sub:"); for (var pk in preSubs) if (preSubs[pk] && preSubs[pk].ok) await dbPut("sub:" + pk, preSubs[pk]); }
       await rememberJob(ids);
       var solo = [], soloOpen = 0, noReadAll = false, pauses = 0, pausedAll = false;
+      // C2 (computer): while one video's photos are taken, the next video is already being searched
+      var canPipe = !IS_MOBILE && prefs.dedup !== false, tails = [], lastTail = null, tailPaused = [];
+      function moreAfter(k) { for (var j = k + 1; j < ids.length; j++) if (results[j].status === "wait") return true; return false; }
+      async function afterTail(k, rr) {
+        if (rr === "paused") { tailPaused.push(k); showResults(); return; }
+        await dbDelAll("seg:" + ids[k] + ":"); await dbDelAll("pic:" + ids[k] + ":"); await dbDel("sub:" + ids[k]);
+        if (!stopReq) await rememberJob(ids);
+        showResults();
+      }
       for (var i = 0; i < ids.length && !stopReq; i++) {
         if (results[i].status !== "wait") continue;                      // finished before the page was closed
-        var r = await runParts(ids[i], i + 1 + "/" + ids.length, results[i]);
+        var r = await runParts(ids[i], i + 1 + "/" + ids.length, results[i], { pipe: canPipe && moreAfter(i), after: lastTail });
+        if (r && r.later) { (function (k, p) { var q = p.then(function (rr) { return afterTail(k, rr); }, function () {}); lastTail = q; tails.push(q); })(i, r.later); continue; }
         if (r === "paused" && !stopReq) {
           // YouTube stopped sending video (it does that after a lot was fetched in a short time). Everything done so far
           // is saved on the device: rest two minutes and carry on from there, a few times; after that leave it to a click.
@@ -1800,6 +1904,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           results[i].msg = (r === "noembed" ? "이 영상은 퍼가기가 막혀 있어요" : "작업 창에서 재생되지 않았어요" + (results[i].why ? " (" + results[i].why + ")" : "")) + " · 마지막에 유튜브 탭에서 따로 처리해요";
           solo.push(i);
         }
+        showResults();
+      }
+      if (tails.length) { await Promise.all(tails); }
+      // photos that YouTube held back while running alongside: once more, one at a time
+      for (var tp = 0; tp < tailPaused.length && !stopReq; tp++) {
+        var k2 = tailPaused[tp], r2 = await runParts(ids[k2], k2 + 1 + "/" + ids.length, results[k2], {});
+        if (r2 !== "paused") { await dbDelAll("seg:" + ids[k2] + ":"); await dbDelAll("pic:" + ids[k2] + ":"); await dbDel("sub:" + ids[k2]); }
         showResults();
       }
       closeStage();
@@ -1861,7 +1972,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       // a phone starts with 4 light players (3 with little memory) and adds more while it pays, up to 8
       var learned = Number(load(BKEY, 0)) || 0, first = mobile ? (two ? (lowMem ? 3 : 4) : lightQ ? 3 : 2) : 4;
       var want = Math.min(cap, opt.start || (auto ? Math.max(first, Math.min(cap, learned || first)) : cap)), everMoved = false, noRead = false, mostPlayers = 0;
-      await openStage();
+      var stg = await openStage();
       var byKey = {}, players = [], nextK = 0, outs = [], badVideo = false, queue = [], segs = [], errLog = [];
       var dur = 0, title = id, w = 1280, hgt = 720, stopAt = 0, STUCK = 25000, pkey = prefKey(), preDone = 0;
 
@@ -1895,8 +2006,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         } catch (e) { if (DBG) console.log("[lc] keep threw: " + e.message); }
       }
       async function addPlayers(n) {
-        var slots = []; for (var i = 0; i < n; i++) slots.push(stage.addSlot());
-        var opened = await Promise.all(slots.map(function (slot) { return openPlayer(slot, id, job, nextK++, onMsg, pmode); }));
+        var slots = []; for (var i = 0; i < n; i++) slots.push(stg.addSlot());
+        var opened = await Promise.all(slots.map(function (slot) { return openPlayer(slot, id, job, nextK++, onMsg, pmode, stg); }));
         var errs = [];
         opened.forEach(function (o, i) {
           if (o && !o.error) { o.slot = slots[i]; o.alive = true; o.seg = null; o.rate = 0; o.diag = ""; o.mt = 0; o.ads = 0; o.lastMsg = Date.now(); byKey[o.key] = o; players.push(o); }
@@ -1958,12 +2069,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       function dismiss(P) { P.alive = false; delete waiters[P.key]; post(P, { type: "stop" }); try { P.slot.remove(); } catch (e) {} }
 
       var errs = await addPlayers(want);
-      if (stopReq) { closeStage(); res.status = "bad"; res.msg = "멈춤"; return "stopped"; }
+      if (stopReq) { closeStage(stg); res.status = "bad"; res.msg = "멈춤"; return "stopped"; }
       if (!players.length) {
-        closeStage();
+        closeStage(stg);
         res.why = summarize(errs);
         var addr = errs.some(function (e) { return /153/.test(e) || e === "blocked"; });
-        if (addr && pip && usePip) { usePip = false; ui.status(label, "작업 창에서 재생이 막혀 이 탭에서 다시 시도해요. 이 탭을 화면에 띄워 두세요."); return runParts(id, label, res, { start: Math.min(want, 3) }); }
+        if (addr && pip && usePip) { usePip = false; ui.status(label, "작업 창에서 재생이 막혀 이 탭에서 다시 시도해요. 이 탭을 화면에 띄워 두세요."); return runParts(id, label, res, Object.assign({}, opt, { start: Math.min(want, 3) })); }
         if (/150|101|소유자|owner/i.test(errs.join(" "))) return "noembed";
         if (embedsWorked || ((await dbAll("seg:" + id + ":")) || []).length) {
           // players worked here a moment ago: YouTube is holding back, this is not a video that can't be shown here
@@ -1974,12 +2085,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         return "stuck";
       }
       var r0 = players[0].ready; title = r0.title || id; w = r0.w; hgt = r0.h; res.title = title;
-      if (prefs.subs !== false && !res.subsP) res.subsP = askSubs(players[0], id);
+      if ((prefs.subs !== false || saveFormat() !== "zip") && !res.subsP) res.subsP = askSubs(players[0], id);   // (the PDF puts the words under each photo)
       dur = 0; players.forEach(function (P) { var d = Number(P.ready && P.ready.dur); if (isFinite(d) && d > dur) dur = d; });
       if (!(dur > 0)) {
         // no player could tell how long the video is: nothing can be planned. Try once more, then leave it for later.
-        players.forEach(function (P) { dismiss(P); }); closeStage();
-        if (!opt.again) { ui.status(label, "영상 길이를 읽지 못해 다시 열어요…"); await bsleep(2000); return runParts(id, label, res, { again: true }); }
+        players.forEach(function (P) { dismiss(P); }); closeStage(stg);
+        if (!opt.again) { ui.status(label, "영상 길이를 읽지 못해 다시 열어요…"); await bsleep(2000); return runParts(id, label, res, Object.assign({}, opt, { again: true })); }
         res.status = "wait"; res.msg = "영상 길이를 읽지 못했어요(실시간 방송이거나, 유튜브가 영상을 보내 주지 않아요)"; return "paused";
       }
       // pieces of 30 s to 2.5 min; the last ones get split further when players run out of work
@@ -2142,13 +2253,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         ui.status(label, title.slice(0, 26) + " · " + Math.floor(pct * 100) + "% · " + (two ? "바뀐 화면 약 " + count + "곳" : "사진 약 " + count + "장") + " · 플레이어 " + working().length + "개" + (adding ? "(늘리는 중)" : "") +
           " · 합계 약 " + (thr >= 10 ? Math.round(thr) : thr.toFixed(1)) + "배속 · 남은 시간 " + (pct > 0.02 && thr > 0.2 ? mins(left / thr) : "계산 중"));
         var per = live.map(function (P) { return P.seg ? (P.diag || (now - P.progAt < 3000 ? (P.rate || 0).toFixed(1) + "x" : "진행 없음")) : "대기"; }).join(" · ");
-        if (stage && stage.ownerDocument) { var hdr = stage.ownerDocument.getElementById("lc-per"); if (hdr) hdr.textContent = "플레이어 " + live.length + "개 (" + (auto ? "자동" : "고정") + "): " + per; }
+        if (stg && stg.per) { var hdr = stg.per; if (hdr) hdr.textContent = "플레이어 " + live.length + "개 (" + (auto ? "자동" : "고정") + "): " + per; }
       }
       if (auto && best && !stopReq && !noRead) save(BKEY, best);
       // a whole video without the browser giving up: the limit learned from an earlier crash may go up by one again
       if (auto && runSafe && !everCrashed && !stopReq && !noRead && segs.length) runSafe++;
       players.forEach(function (P) { if (P.alive) post(P, { type: "stop" }); delete waiters[P.key]; });
-      closeStage();
+      closeStage(stg);
       var findSecs = (Date.now() - began) / 1000, findLen = Math.max(0, dur - preDone);
       segs.forEach(function (sg) { if (!sg.done && !stopReq && dur - sg.start <= 8) { sg.done = true; sg.tail = true; } });
       var undone = segs.filter(function (sg) { return !sg.done; }).length;
@@ -2169,7 +2280,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (!stopReq && segs.length && lost.length === segs.length) {
         // nothing could be played at all here
         res.why = summarize(errLog);
-        if (pip && usePip) { usePip = false; ui.status(label, "작업 창에서 재생되지 않아 이 탭에서 다시 시도해요. 이 탭을 화면에 띄워 두세요."); return runParts(id, label, res, { start: 2 }); }
+        if (pip && usePip) { usePip = false; ui.status(label, "작업 창에서 재생되지 않아 이 탭에서 다시 시도해요. 이 탭을 화면에 띄워 두세요."); return runParts(id, label, res, Object.assign({}, opt, { start: 2 })); }
         return "stuck";
       }
       var G = makeGeom(w, hgt);
@@ -2191,46 +2302,56 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         outs.forEach(function (o) { sS += o.d.samples || 0; sB += o.d.blanks || 0; });
         if (!sS && !stopReq) {
           // not one look was taken: the video did not really run. Try once more, then leave it for later.
-          if (!opt.again) { ui.status(label, "화면을 한 번도 읽지 못해 다시 해요…"); await dbDelAll("seg:" + id + ":"); await bsleep(2000); return runParts(id, label, res, { again: true }); }
+          if (!opt.again) { ui.status(label, "화면을 한 번도 읽지 못해 다시 해요…"); await dbDelAll("seg:" + id + ":"); await bsleep(2000); return runParts(id, label, res, Object.assign({}, opt, { again: true })); }
           res.status = "wait"; res.msg = "영상을 읽지 못했어요(화면 확인 0번)"; return "paused";
         }
         res.status = "bad"; res.msg = "찍힌 장면이 없어요 (화면 확인 " + sS + "번 중 빈 화면 " + sB + "번)"; return "fail";
       }
-      if (two) {
-        var moveMask = new Uint8Array(G.nb); parts.forEach(function (pt) { if (pt.mask) for (var b = 0; b < G.nb; b++) if (pt.mask[b]) moveMask[b] = 1; });
-        var miss = await takePhotos(id, label, title, scenes, G, mobile, moveMask);
-        if (stopReq) {
-          // stopped while taking photos: what was taken is kept (saved as a ZIP), not thrown away
-          var took = scenes.filter(function (sc) { return sc.blobP; });
-          if (took.length) { ui.status(label, "멈춤 · 찍은 사진 " + took.length + "장을 저장하는 중…"); await saveZip(title + "_중단", took, 300, null, function (t) { ui.status(label, t); }); }
-          res.status = "bad"; res.msg = "멈춤" + (took.length ? " · 찍은 " + took.length + " / " + scenes.length + "장은 저장" : ""); return "stopped";
+      // the photos and the files. On a computer this part may run while the next video is already being searched
+      // (one such part at a time: each waits for the one before it).
+      var cropBox = prefs.crop ? findCrop(scenes, G) : null;
+      async function tail() {
+        if (opt.after) { try { await opt.after; } catch (e) {} }
+        if (two) {
+          var moveMask = new Uint8Array(G.nb); parts.forEach(function (pt) { if (pt.mask) for (var b = 0; b < G.nb; b++) if (pt.mask[b]) moveMask[b] = 1; });
+          var miss = await takePhotos(id, label, title, scenes, G, mobile, moveMask);
+          if (stopReq) {
+            // stopped while taking photos: what was taken is kept (saved as a ZIP), not thrown away
+            var took = scenes.filter(function (sc) { return sc.blobP; });
+            if (took.length) { ui.status(label, "멈춤 · 찍은 사진 " + took.length + "장을 저장하는 중…"); await saveZip(title + "_중단", took, 300, null, function (t) { ui.status(label, t); }, { crop: cropBox }); }
+            res.status = "bad"; res.msg = "멈춤" + (took.length ? " · 찍은 " + took.length + " / " + scenes.length + "장은 저장" : ""); return "stopped";
+          }
+          if (miss.gaveUp) {
+            sessionCap = Math.max(2, Math.ceil(Math.max(1, mostPlayers) / 2));
+            var have = scenes.filter(function (sc) { return sc.blobP; }).length;
+            res.status = "wait"; res.why = miss.why;
+            res.msg = "유튜브가 영상을 보내 주지 않아 사진 찍기를 잠시 멈췄어요 (" + have + " / " + scenes.length + "장 저장됨" + (miss.why ? " · " + miss.why : "") + ")";
+            return "paused";
+          }
+          scenes = scenes.filter(function (sc) { return sc.blobP; });
+          if (!scenes.length) { res.status = "bad"; res.msg = "사진을 찍지 못했어요" + (miss.why ? " (" + miss.why + ")" : ""); return "fail"; }
+          if (miss.n) note += " · 찍지 못한 사진 " + miss.n + "장";
+          var shotSecs = (Date.now() - began) / 1000 - findSecs;
+          res.note = [miss.size, miss.lower ? "화질을 " + miss.lower + "로 낮춰 찍었어요" : "",
+            "찾기 " + clock(findSecs) + (findSecs > 3 && findLen > 30 ? "(평균 " + (findLen / findSecs).toFixed(1) + "배속, 플레이어 최대 " + mostPlayers + "개)" : ""), "찍기 " + clock(shotSecs) + (miss.most ? "(플레이어 최대 " + miss.most + "개)" : "")].filter(Boolean).join(" · ");
         }
-        if (miss.gaveUp) {
-          sessionCap = Math.max(2, Math.ceil(Math.max(1, mostPlayers) / 2));
-          var have = scenes.filter(function (sc) { return sc.blobP; }).length;
-          res.status = "wait"; res.why = miss.why;
-          res.msg = "유튜브가 영상을 보내 주지 않아 사진 찍기를 잠시 멈췄어요 (" + have + " / " + scenes.length + "장 저장됨" + (miss.why ? " · " + miss.why : "") + ")";
-          return "paused";
-        }
-        scenes = scenes.filter(function (sc) { return sc.blobP; });
-        if (!scenes.length) { res.status = "bad"; res.msg = "사진을 찍지 못했어요" + (miss.why ? " (" + miss.why + ")" : ""); return "fail"; }
-        if (miss.n) note += " · 찍지 못한 사진 " + miss.n + "장";
-        var shotSecs = (Date.now() - began) / 1000 - findSecs;
-        res.note = [miss.size, miss.lower ? "화질을 " + miss.lower + "로 낮춰 찍었어요" : "",
-          "찾기 " + clock(findSecs) + (findSecs > 3 && findLen > 30 ? "(평균 " + (findLen / findSecs).toFixed(1) + "배속, 플레이어 최대 " + mostPlayers + "개)" : ""), "찍기 " + clock(shotSecs) + (miss.most ? "(플레이어 최대 " + miss.most + "개)" : "")].filter(Boolean).join(" · ");
+        ui.status(label, res.subsP ? "대본을 마저 받는 중… (최대 30초)" : "ZIP 만드는 중…");
+        var trn = res.subsP ? await Promise.race([res.subsP, bsleep(30000).then(function () { return null; })]) : null;
+        if (!(trn && trn.ok) && (prefs.subs !== false || saveFormat() !== "zip")) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
+        if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
+        var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null, function (t) { ui.status(label, t); }, { segs: trn && trn.ok ? trn.segs : null, crop: cropBox });
+        res.handed = !!(sv && sv.handed); res.handWhy = sv && sv.why || ""; res.zipSaved = !sv || sv.saved !== false;
+        // the files stay on hand for the two latest videos, so a download the browser dropped can be asked for again with a tap
+        res.files = sv && sv.files && sv.files.length ? sv.files : null; keptFiles.push(res); while (keptFiles.length > 2) { var old = keptFiles.shift(); old.files = null; }
+        res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" + (trn && trn.why ? "(" + String(trn.why).slice(0, 60) + ")" : "") : "";
+        if (res.subsInfo) res.note = [res.note, res.subsInfo, res.handed ? "정리 노트로 보냄" + (res.zipSaved ? "" : "(ZIP 파일은 저장 안 함)") : prefs.mode === "digest" ? "정리 노트 자동 전달 안 됨(" + (res.handWhy || "?") + ")" : ""].filter(Boolean).join(" · ");
+        res.status = "done"; res.count = scenes.length; res.secs = (Date.now() - began) / 1000;
+        if (sessionCap && !backoffs && !undone) sessionCap += 2;
+        if (note) { res.status = "bad"; res.msg = "사진 " + scenes.length + "장 저장" + note + " (그 부분만 빠졌어요)"; }
+        return "done";
       }
-      ui.status(label, res.subsP ? "대본을 마저 받는 중… (최대 30초)" : "ZIP 만드는 중…");
-      var trn = res.subsP ? await Promise.race([res.subsP, bsleep(30000).then(function () { return null; })]) : null;
-      if (!(trn && trn.ok) && prefs.subs !== false) trn = (preSubs[id] && preSubs[id].ok ? preSubs[id] : await dbGet("sub:" + id)) || trn;
-      if (!(trn && trn.ok) && preSubs[id] && preSubs[id].why) trn = { ok: false, why: preSubs[id].why };
-      var sv = await saveZip(title + (lost.length ? "_일부" : ""), scenes, 300, prefs.subs !== false ? { id: id, dur: dur, subs: trn } : null, function (t) { ui.status(label, t); });
-      res.handed = !!(sv && sv.handed); res.handWhy = sv && sv.why || ""; res.zipSaved = !sv || sv.saved !== false;
-      res.subsInfo = trn && trn.ok ? "대본 " + trn.segs.length + "줄(" + trn.source + ")" : prefs.subs !== false ? "대본 없음" + (trn && trn.why ? "(" + String(trn.why).slice(0, 60) + ")" : "") : "";
-      if (res.subsInfo) res.note = [res.note, res.subsInfo, res.handed ? "정리 노트로 보냄" + (res.zipSaved ? "" : "(ZIP 파일은 저장 안 함)") : prefs.mode === "digest" ? "정리 노트 자동 전달 안 됨(" + (res.handWhy || "?") + ")" : ""].filter(Boolean).join(" · ");
-      res.status = "done"; res.count = scenes.length; res.secs = (Date.now() - began) / 1000;
-      if (sessionCap && !backoffs && !undone) sessionCap += 2;
-      if (note) { res.status = "bad"; res.msg = "사진 " + scenes.length + "장 저장" + note + " (그 부분만 빠졌어요)"; }
-      return "done";
+      if (opt.pipe && two && !stopReq) { res.msg = "사진 찍기 차례를 기다리는 중 (다음 영상 찾기와 함께 진행)"; showResults(); return { later: tail() }; }
+      return tail();
     }
     // Second pass: the photos. A few players in the chosen quality go straight to each moment that is kept and send
     // its picture. Each picture is checked against what the first pass saw there (a clearly different screen is asked
@@ -2248,7 +2369,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var q = prefs.quality || "hd1080", job = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       var queue = [], players = [], byKey = {}, nextK = 0, seqN = 1, crashes = 0, opens = 0, lastAny = Date.now(), empty = new Uint8Array(G.nb), errs = [];
       for (var c = 0; c < todo.length; c += 8) queue.push(todo.slice(c, c + 8));
-      await openStage();
+      var stg = await openStage();
       function left(b) { return b.filter(function (k) { return !scenes[k].blobP && !scenes[k].gone; }); }
       function accept(scn, blob) { scn.blobP = copyPic(blob); got++; lastAny = Date.now(); scn.blobP.then(function (v) { dbPut(scn.pk, v); }); }
       function again(scn, blob) {
@@ -2282,8 +2403,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }
       function drop(P, why) { P.alive = false; delete waiters[P.key]; if (P.batch) { var rest = left(P.batch); if (rest.length) queue.unshift(rest); P.batch = null; } errs.push(why); post(P, { type: "stop" }); try { P.slot.remove(); } catch (e) {} }
       async function add(n) {
-        var slots = []; for (var k = 0; k < n; k++) slots.push(stage.addSlot());
-        var opened = await Promise.all(slots.map(function (slot) { return openPlayer(slot, id, job, nextK++, onMsg, q); }));
+        var slots = []; for (var k = 0; k < n; k++) slots.push(stg.addSlot());
+        var opened = await Promise.all(slots.map(function (slot) { return openPlayer(slot, id, job, nextK++, onMsg, q, stg); }));
         opened.forEach(function (o, k) {
           if (o && !o.error) { o.slot = slots[k]; o.alive = true; o.batch = null; o.lastMsg = o.progAt = Date.now(); byKey[o.key] = o; players.push(o); }
           else { errs.push((o && o.error) || "error"); try { slots[k].remove(); } catch (e) {} }
@@ -2349,10 +2470,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           } else { ramp.on = false; ramp.best = n; }
         }
         ui.status(label, title.slice(0, 26) + " · 사진 찍는 중 " + got + " / " + total + "장 · 플레이어 " + live.length + "개" + (out.lower ? " (" + out.lower + ")" : ""));
-        if (stage && stage.ownerDocument) { var hdr = stage.ownerDocument.getElementById("lc-per"); if (hdr) hdr.textContent = "사진 찍는 플레이어 " + live.length + "개: " + live.map(function (P) { return P.diag || (P.batch ? "찍는 중" : "대기"); }).join(" · "); }
+        if (stg && stg.per) { var hdr = stg.per; if (hdr) hdr.textContent = "사진 찍는 플레이어 " + live.length + "개: " + live.map(function (P) { return P.diag || (P.batch ? "찍는 중" : "대기"); }).join(" · "); }
       }
       players.forEach(function (P) { if (P.alive) { post(P, { type: "stop" }); } delete waiters[P.key]; });
-      closeStage();
+      closeStage(stg);
       // remember what this device managed: what paid off, or one less than what crashed
       try {
         if (crashes) memory[cls] = Math.max(baseP, Math.min(memory[cls] || capP, (out.most || 2) - 1));
