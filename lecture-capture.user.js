@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.22.4
+// @version      1.23.0
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -42,7 +42,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
   // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
-  try { document.documentElement.setAttribute("data-lc-cap", "1.22.4"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
+  try { document.documentElement.setAttribute("data-lc-cap", "1.23.0"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -1156,21 +1156,71 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var enc = new TextEncoder(), d = new Date(), parts = [], cen = [], off = 0, cenLen = 0;
     var dt = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(), tm = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
     entries.forEach(function (e) {
-      var nm = enc.encode(e.name), n = e.data.length, lh = new DataView(new ArrayBuffer(30)), ch = new DataView(new ArrayBuffer(46));
+      var nm = enc.encode(e.name), n = e.size, lh = new DataView(new ArrayBuffer(30)), ch = new DataView(new ArrayBuffer(46));
       lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true); lh.setUint16(10, tm, true); lh.setUint16(12, dt, true);
       lh.setUint32(14, e.crc, true); lh.setUint32(18, n, true); lh.setUint32(22, n, true); lh.setUint16(26, nm.length, true); lh.setUint16(28, 0, true);
       ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true); ch.setUint16(12, tm, true); ch.setUint16(14, dt, true);
       ch.setUint32(16, e.crc, true); ch.setUint32(20, n, true); ch.setUint32(24, n, true); ch.setUint16(28, nm.length, true); ch.setUint32(42, off, true);
-      parts.push(lh.buffer, nm, e.data); cen.push(ch.buffer, nm);
+      parts.push(lh.buffer, nm, e.data); cen.push(ch.buffer, nm);   // e.data: the photo's own Blob (not copied)
       off += 30 + nm.length + n; cenLen += 46 + nm.length;
     });
     var end = new DataView(new ArrayBuffer(22));
     end.setUint32(0, 0x06054b50, true); end.setUint16(8, entries.length, true); end.setUint16(10, entries.length, true); end.setUint32(12, cenLen, true); end.setUint32(16, off, true);
     return new Blob(parts.concat(cen, [end.buffer]), { type: "application/zip" });
   }
+  // the bytes are read once for the checksum (and a JPEG's size), then let go: the ZIP and PDF point at the Blob itself
   async function entryOf(name, blobOrText) {
-    var u8 = typeof blobOrText === "string" ? new TextEncoder().encode(blobOrText) : new Uint8Array(await new Response(blobOrText).arrayBuffer());
-    return { name: name, data: u8, crc: crc32(u8) };
+    var isText = typeof blobOrText === "string", u8 = isText ? new TextEncoder().encode(blobOrText) : new Uint8Array(await new Response(blobOrText).arrayBuffer());
+    var e = { name: name, data: isText ? u8 : blobOrText, size: u8.length, crc: crc32(u8) };
+    if (!isText && /\.jpe?g$/i.test(name)) { var d = jpegSize(u8); if (d) { e.w = d.w; e.h = d.h; e.comps = d.c; } }
+    return e;
+  }
+  function jpegSize(u8) {
+    var i = 2;
+    while (i + 9 < u8.length) {
+      if (u8[i] !== 0xFF) return null;
+      var m = u8[i + 1], len = (u8[i + 2] << 8) | u8[i + 3];
+      if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) return { h: (u8[i + 5] << 8) | u8[i + 6], w: (u8[i + 7] << 8) | u8[i + 8], c: u8[i + 9] };
+      i += 2 + len;
+    }
+    return null;
+  }
+  // F: the photos as one PDF (one page each, the photo's own JPEG inside, its time written under it)
+  function pdfStore(entries) {
+    var enc = new TextEncoder(), parts = [], off = 0, xref = [];
+    function add(x) { if (typeof x === "string") { var b = enc.encode(x); parts.push(b); off += b.length; } else { parts.push(x.data); off += x.size; } }
+    var pages = entries.filter(function (e) { return e.w && e.h; }), N = pages.length, FIRST = 4;
+    add("%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3\n");
+    xref[1] = off; add("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    xref[2] = off; add("2 0 obj\n<< /Type /Pages /Count " + N + " /Kids [" + pages.map(function (p, i) { return (FIRST + i * 3) + " 0 R"; }).join(" ") + "] >>\nendobj\n");
+    xref[3] = off; add("3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+    pages.forEach(function (p, i) {
+      var pn = FIRST + i * 3, im = pn + 1, ct = pn + 2, W = p.w, H = p.h, bar = Math.max(18, Math.round(H * 0.03)), fs = Math.round(bar * 0.6);
+      var label = (p.label || "").replace(/[^\x20-\x7e]/g, "").replace(/[()\\]/g, "");
+      xref[pn] = off; add(pn + " 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + W + " " + (H + bar) + "] /Resources << /XObject << /Im0 " + im + " 0 R >> /Font << /F1 3 0 R >> >> /Contents " + ct + " 0 R >>\nendobj\n");
+      xref[im] = off; add(im + " 0 obj\n<< /Type /XObject /Subtype /Image /Width " + W + " /Height " + H + " /ColorSpace /" + (p.comps === 1 ? "DeviceGray" : p.comps === 4 ? "DeviceCMYK" : "DeviceRGB") + " /BitsPerComponent 8 /Filter /DCTDecode /Length " + p.size + " >>\nstream\n");
+      add(p); add("\nendstream\nendobj\n");
+      var c = "q " + W + " 0 0 " + H + " 0 " + bar + " cm /Im0 Do Q BT /F1 " + fs + " Tf " + Math.round(bar * 0.4) + " " + Math.round(bar * 0.3) + " Td (" + label + ") Tj ET";
+      xref[ct] = off; add(ct + " 0 obj\n<< /Length " + enc.encode(c).length + " >>\nstream\n" + c + "\nendstream\nendobj\n");
+    });
+    var total = FIRST + N * 3, xo = off, x = "xref\n0 " + total + "\n0000000000 65535 f \n";
+    for (var k = 1; k < total; k++) x += String(xref[k]).padStart(10, "0") + " 00000 n \n";
+    add(x + "trailer\n<< /Size " + total + " /Root 1 0 R >>\nstartxref\n" + xo + "\n%%EOF\n");
+    return new Blob(parts, { type: "application/pdf" });
+  }
+  function saveFormat() { return prefs.saveAs === "pdf" || prefs.saveAs === "both" ? prefs.saveAs : "zip"; }
+  function downloadFile(blob, name) {
+    // the download link is clicked inside a hidden frame: Firefox closes the work window when this page itself "navigates" to a download
+    var url = URL.createObjectURL(blob), f = null;
+    try {
+      f = document.createElement("iframe"); f.style.display = "none"; document.body.appendChild(f);
+      var fd = f.contentDocument, a = fd.createElement("a"); a.href = url; a.download = name; fd.body.appendChild(a); a.click();
+      setTimeout(function () { f.remove(); }, 60000);
+    } catch (e) {
+      if (f) f.remove();
+      var a2 = document.createElement("a"); a2.href = url; a2.download = name; document.body.appendChild(a2); a2.click(); a2.remove();
+    }
+    setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
   }
   async function saveZip(title, scenes, waitMs, extra, say) {
     say = say || function () {};
@@ -1182,6 +1232,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (!b) continue;
       if (!(b instanceof Blob)) { try { b = new Blob([b], { type: "image/jpeg" }); } catch (e) { continue; } }
       var fname = String(i + 1).padStart(4, "0") + "_" + fmt(scenes[i].t) + ".jpg", en = await entryOf(fname, b);
+      en.label = String(i + 1) + " / " + total + "   " + fmt(scenes[i].t);
       full.push(en); if (extra) (extra.photos = extra.photos || []).push({ file: fname, t: Math.round(scenes[i].t * 10) / 10 });
       if (lite) { var lb0 = await lighter(b); if (lb0 === b) lite.push(en); else { liteSame = false; lite.push(await entryOf(fname, lb0)); } }
       if (i % 10 === 9 || i === total - 1) { say("ZIP 만드는 중… 사진 " + (i + 1) + " / " + total + "장"); await yieldNow(); }
@@ -1204,19 +1255,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       try { handed = await bridgePut({ kind: "zip", name: name, id: extra.id, title: title, words: !!(extra.subs && extra.subs.ok) }, liteSame ? blob : zipStore(lite)); } catch (e) { handed = false; }
     }
     // the file itself: always for plain capture and whenever the hand-over did not work; for 영상 정리 only if wanted
-    var saved = !lite || !handed || keepZipOn();
+    var saved = !lite || !handed || keepZipOn(), fmtSave = saveFormat();
     if (saved) {
-      // the download link is clicked inside a hidden frame: Firefox closes the work window when this page itself "navigates" to a download
-      var url = URL.createObjectURL(blob), f = null;
-      try {
-        f = document.createElement("iframe"); f.style.display = "none"; document.body.appendChild(f);
-        var fd = f.contentDocument, a = fd.createElement("a"); a.href = url; a.download = name; fd.body.appendChild(a); a.click();
-        setTimeout(function () { f.remove(); }, 60000);
-      } catch (e) {
-        if (f) f.remove();
-        var a2 = document.createElement("a"); a2.href = url; a2.download = name; document.body.appendChild(a2); a2.click(); a2.remove();
-      }
-      setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 120000);
+      if (fmtSave !== "pdf") downloadFile(blob, name);
+      if (fmtSave !== "zip") { say("PDF 만드는 중…"); try { downloadFile(pdfStore(full.filter(function (e) { return e.w; })), name.replace(/\.zip$/, ".pdf")); } catch (e) { downloadFile(blob, name); } }
     }
     full = null; lite = null;
     await sleep(waitMs == null ? 2500 : waitMs);
@@ -1297,6 +1339,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "caps" }), h("span", { text: "자막이 바뀌어도 새로 찍기 (화면과 자막이 둘 다 같을 때만 건너뜀, 추천)" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "merge" }), h("span", { text: "내용이 덧붙기만 하면 완성된 한 장만 남기기" })]),
         h("label", { class: "c capOnly" }, [h("input", { type: "checkbox", id: "subs" }), h("span", { text: "대본(자막)도 ZIP에 함께 넣기" })]),
+        h("label", { class: "c" }, [h("input", { type: "checkbox", id: "fastShot" }), h("span", { text: "빠르게 찍기: 화질 720p 이하일 때 장면을 찾으면서 바로 찍어요(사진 찍는 단계가 없어져요. 폰에서 더 빠른지 비교해 보세요)" })]),
+        h("div", { class: "r" }, [h("label", {}, ["사진 저장 형식", h("select", { id: "saveAs" }, [opt("zip", "ZIP (사진 파일 묶음)"), opt("pdf", "PDF (한 파일로 넘겨 보기)"), opt("both", "ZIP + PDF 둘 다")])])]),
         h("label", { class: "c digOnly" }, [h("input", { type: "checkbox", id: "keepZip" }), h("span", { text: "정리 자료 ZIP도 다운로드 폴더에 저장 (정리 노트로 자동 전달되면 없어도 돼요. 전달이 안 되면 늘 저장해요)" })]),
         h("button", { id: "go", text: "캡처 시작" }),
         h("div", { class: "st", id: "st" }),
@@ -1310,6 +1354,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
     $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
     $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
+    $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat();
     function applyMode() {
       var dig = prefs.mode === "digest";
       $("modeCap").checked = !dig; $("modeDig").checked = dig; $("digNote").style.display = dig ? "" : "none";
@@ -1323,13 +1368,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function setOpen(o) { prefs.open = o; $("bd").style.display = o ? "" : "none"; $("fold").textContent = o ? "▾" : "▸"; savePrefs(); }
     setOpen(prefs.open !== false);
     $("hd").addEventListener("click", function () { setOpen(!prefs.open); });
-    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip"].forEach(function (id) {
+    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip", "fastShot", "saveAs"].forEach(function (id) {
       $(id).addEventListener("change", function () { readPrefs(); savePrefs(); });
     });
     function readPrefs() {
       prefs.workers = Number($("workers").value); prefs.quality = $("quality").value; prefs.minPx = Number($("sens").value);
       prefs.ignoreMoving = $("moving").checked; prefs.merge = $("merge").checked; prefs.ignoreCaptions = !$("caps").checked;
       prefs.every = fixEvery($("every").value); prefs.dedup = $("dedup").checked; prefs.subs = $("subs").checked; prefs.keepZip = $("keepZip").checked;
+      prefs.fastShot = $("fastShot").checked; prefs.saveAs = $("saveAs").value;
     }
     return {
       $: $, readPrefs: readPrefs, applyMode: applyMode, root: root,
@@ -1351,11 +1397,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
         $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
         $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
+        $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat();
         applyMode();
       }
     };
   }
-  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip }; }
+  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip, fastShot: prefs.fastShot, saveAs: prefs.saveAs }; }
   function jobPrefs() { return Object.assign(pickPrefs(), userSet || {}); }
 
   // =====================================================================
@@ -1802,14 +1849,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || "");
       // Two passes (when repeats are skipped): light players find the moments where the screen changes, then the photos
       // of just those moments are taken in the chosen quality. Without skipping repeats every look is a photo: one pass.
-      var two = prefs.dedup !== false, pmode = two ? "det" : prefs.quality;
+      // 빠르게 찍기: at 720p or lower the finding players take the photos themselves (no second pass of hundreds of jumps)
+      var lightQ = /^(hd720|large|medium|small)$/.test(prefs.quality), two = prefs.dedup !== false && !(prefs.fastShot && lightQ), pmode = two ? "det" : prefs.quality;
       // A phone has little memory for video players: too many and the browser throws them all out (the sad face).
       // Light players: up to 6; full-quality ones: up to 3. A crash lowers the count for the rest of this run only.
       var auto = !(prefs.workers > 0), lowMem = (navigator.deviceMemory || 8) <= 4;
-      var cap = opt.max || (auto ? (mobile ? (two ? ((navigator.deviceMemory || 8) <= 4 ? 4 : 6) : 3) : 16) : Math.min(16, prefs.workers));
+      // (1.23) a phone may go up to 8 light players (5 with little memory); 720p photo-takers up to 5; 1080p+ up to 3
+      var cap = opt.max || (auto ? (mobile ? (two ? (lowMem ? 5 : 8) : lightQ ? (lowMem ? 3 : 5) : 3) : 16) : Math.min(16, prefs.workers)), hardCap = cap;
       if (auto && runSafe) cap = Math.max(1, Math.min(cap, runSafe));
       if (auto && sessionCap) cap = Math.max(1, Math.min(cap, sessionCap));   // YouTube slowed us down earlier in this run
-      var learned = Number(load(BKEY, 0)) || 0, first = mobile ? (two ? (lowMem ? 3 : 4) : 2) : 4;
+      // a phone starts with 4 light players (3 with little memory) and adds more while it pays, up to 8
+      var learned = Number(load(BKEY, 0)) || 0, first = mobile ? (two ? (lowMem ? 3 : 4) : lightQ ? 3 : 2) : 4;
       var want = Math.min(cap, opt.start || (auto ? Math.max(first, Math.min(cap, learned || first)) : cap)), everMoved = false, noRead = false, mostPlayers = 0;
       await openStage();
       var byKey = {}, players = [], nextK = 0, outs = [], badVideo = false, queue = [], segs = [], errLog = [];
@@ -1961,6 +2011,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       // (speeds are compared by the best 8-second average each player count reached once it had settled)
       var peak = 0, settleAt = Date.now() + 12000;
       var hist = [], thr = 0, rampAt = Date.now() + 16000, before = null, adding = false, rampDone = !auto, best = 0, lastTick = Date.now();
+      // (1.23) whatever held the count back (no gain at that moment, a crash, YouTube slowing down) is tried again every 90 s
+      var rearmAt = Date.now() + 90000, lastCrashAt = 0;
       while (true) {
         await bsleep(1000);
         var now = Date.now();
@@ -2006,7 +2058,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           // players that have gone completely silent: the browser has thrown them out (out of memory: the sad face)
           var dead = busy.filter(function (P) { return now - (P.lastMsg || 0) > 8000; });
           if (dead.length) {
-            crashed = Math.max(crashed, alive().length); openEpoch++;
+            crashed = Math.max(crashed, alive().length); openEpoch++; lastCrashAt = now;
             dead.forEach(function (P) { P.diag = "응답 없음"; retire(P, true); });
             busy = players.filter(function (P) { return P.alive && P.seg; });
           }
@@ -2057,6 +2109,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             await addPlayers(batch);
             alive().forEach(assign);
           }
+          if (auto && rampDone && !adding && now >= rearmAt && peak > 0 && left / peak > 40) {
+            var lim = hardCap; if (runSafe && now - lastCrashAt < 120000) lim = Math.min(lim, runSafe + 1);
+            if (working().length < lim) { cap = lim; rampDone = false; before = null; rampAt = now; best = working().length; }
+            rearmAt = now + 90000;
+          }
           // 자동: judge the last step up, then maybe take another
           if (!rampDone && !adding && now >= rampAt) {
             var n = working().length, healthy = busy.length > 0 && busy.every(function (P) { return now - P.progAt < 6000; });
@@ -2071,7 +2128,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
             } else if (!best && healthy) best = n;
             if (!rampDone) {
               if (n >= cap) rampDone = true;
-              else if (healthy && peak > 0 && left / peak > 30) {
+              else if (healthy && peak > 0 && left / peak > 20) {
                 var add = Math.min(cap - n, Math.max(2, Math.ceil(n / 2)));
                 before = { n: n, thr: peak }; adding = true;
                 addPlayers(add).then(function () { adding = false; alive().forEach(assign); peak = 0; settleAt = Date.now() + 10000; rampAt = Date.now() + 18000; }, function () { adding = false; });
@@ -2140,8 +2197,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         res.status = "bad"; res.msg = "찍힌 장면이 없어요 (화면 확인 " + sS + "번 중 빈 화면 " + sB + "번)"; return "fail";
       }
       if (two) {
-        var miss = await takePhotos(id, label, title, scenes, G, mobile);
-        if (stopReq) { res.status = "bad"; res.msg = "멈춤"; return "stopped"; }
+        var moveMask = new Uint8Array(G.nb); parts.forEach(function (pt) { if (pt.mask) for (var b = 0; b < G.nb; b++) if (pt.mask[b]) moveMask[b] = 1; });
+        var miss = await takePhotos(id, label, title, scenes, G, mobile, moveMask);
+        if (stopReq) {
+          // stopped while taking photos: what was taken is kept (saved as a ZIP), not thrown away
+          var took = scenes.filter(function (sc) { return sc.blobP; });
+          if (took.length) { ui.status(label, "멈춤 · 찍은 사진 " + took.length + "장을 저장하는 중…"); await saveZip(title + "_중단", took, 300, null, function (t) { ui.status(label, t); }); }
+          res.status = "bad"; res.msg = "멈춤" + (took.length ? " · 찍은 " + took.length + " / " + scenes.length + "장은 저장" : ""); return "stopped";
+        }
         if (miss.gaveUp) {
           sessionCap = Math.max(2, Math.ceil(Math.max(1, mostPlayers) / 2));
           var have = scenes.filter(function (sc) { return sc.blobP; }).length;
@@ -2172,7 +2235,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     // Second pass: the photos. A few players in the chosen quality go straight to each moment that is kept and send
     // its picture. Each picture is checked against what the first pass saw there (a clearly different screen is asked
     // for again a little later in the video), and saved on the device as it arrives.
-    async function takePhotos(id, label, title, scenes, G, mobile) {
+    async function takePhotos(id, label, title, scenes, G, mobile, moveMask) {
       var out = { n: 0, lower: "", why: "", px: 0, size: "", gaveUp: false }, todo = [], got = 0, total = scenes.length;
       for (var i = 0; i < scenes.length; i++) {
         var sc = scenes[i];
@@ -2206,7 +2269,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           if (!scn || scn.blobP || scn.gone) return;
           if (!d.blob || !d.ok) return again(scn, null);
           var differs = false;
-          try { if (d.g && scn.sig && d.g.length === scn.sig.g.length) differs = analyze(scn.sig, { g: d.g, modes: new Int16Array(G.nb).fill(-1), blank: d.blank }, G, empty).C > 0.04 * G.n; } catch (e) {}
+          try { if (d.g && scn.sig && d.g.length === scn.sig.g.length) differs = analyze(scn.sig, { g: d.g, modes: new Int16Array(G.nb).fill(-1), blank: d.blank }, G, moveMask || empty).C > 0.04 * G.n; } catch (e) {}
           if (differs) again(scn, d.blob); else { accept(scn, d.blob); if (d.w && d.h && d.w * d.h > out.px) { out.px = d.w * d.h; out.size = d.w + "×" + d.h; } }
         } else if (d.type === "shots-done") { var rest = left(P.batch); P.batch = null; if (rest.length) rest.forEach(function (k) { again(scenes[k], null); }); give(P); }
       }
@@ -2232,12 +2295,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       // is remembered for this device and quality class; a crash lowers it.
       var heavy = /^(max|hd2160|hd1440|hd1080)$/.test(q), cls = heavy ? "h" : "l", SHOTKEY = "lecture-capture-shots-v2";
       var memory = load(SHOTKEY, {}), lowMem = (navigator.deviceMemory || 8) <= 4;
-      var capP = mobile ? (heavy ? (lowMem ? 3 : 4) : (lowMem ? 5 : 6)) : 8;
+      var capP = mobile ? (heavy ? (lowMem ? 3 : 4) : (lowMem ? 5 : 8)) : 10;
       // start at the device's usual count, or higher if more paid off before; never lower because of an earlier bad run
       var baseP = mobile ? (heavy ? 2 : lowMem ? 3 : 4) : 4, startP = Math.max(baseP, memory[cls] || 0);
       var want = Math.max(1, Math.min(capP, startP, Math.ceil(todo.length / 8))), lastTick = Date.now(), crashN = 0;
       // (the speed is measured from 4 s after a player was added - it first has to load - over the next 10 s)
-      var ramp = { on: true, baseAt: Date.now() + 4000, base: null, at: Date.now() + 14000, before: null, best: 0, adding: false };
+      var ramp = { on: true, baseAt: Date.now() + 4000, base: null, at: Date.now() + 14000, before: null, best: 0, adding: false, rearm: Date.now() + 60000 }, lastCrashP = 0;
       await add(want);
       while (!stopReq) {
         await bsleep(500);
@@ -2252,7 +2315,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         var live = players.filter(function (P) { return P.alive; }), busy = live.filter(function (P) { return P.batch; });
         if (!busy.length && !queue.some(function (b) { return left(b).length; })) break;
         var dead = busy.filter(function (P) { return now - P.lastMsg > 8000; });
-        if (dead.length) { crashes++; crashN = live.length; openEpoch++; live.forEach(function (P) { drop(P, "응답 없음"); }); }
+        if (dead.length) { crashes++; crashN = live.length; lastCrashP = now; openEpoch++; live.forEach(function (P) { drop(P, "응답 없음"); }); }
         else busy.forEach(function (P) { if (now - P.progAt > 45000) drop(P, P.diag || "진행 없음"); });
         live = players.filter(function (P) { return P.alive; });
         live.forEach(give);
@@ -2270,9 +2333,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           await add(reN);
         }
         out.most = Math.max(out.most || 0, live.length);
-        // more players while it pays (not after a crash, and only while there is enough left to share)
-        if (ramp.on && !crashes && !ramp.adding && live.length && !ramp.base && now >= ramp.baseAt) ramp.base = { got: got, t: now };
-        if (ramp.on && !crashes && !ramp.adding && live.length && ramp.base && now >= ramp.at) {
+        // more players while it pays (not within a minute of a crash, and only while there is enough left to share);
+        // having stopped adding is not final: a minute later it tries again
+        var calm = !crashes || now - lastCrashP > 60000;
+        if (!ramp.on && !ramp.adding && calm && now >= ramp.rearm && live.length && live.length < capP && total - got > live.length * 4) { ramp.on = true; ramp.before = null; ramp.base = null; ramp.baseAt = now + 1000; ramp.at = now + 11000; }
+        if (!ramp.on && now >= ramp.rearm) ramp.rearm = now + 60000;
+        if (ramp.on && calm && !ramp.adding && live.length && !ramp.base && now >= ramp.baseAt) ramp.base = { got: got, t: now };
+        if (ramp.on && calm && !ramp.adding && live.length && ramp.base && now >= ramp.at) {
           var rate = (got - ramp.base.got) / Math.max(1, (now - ramp.base.t) / 1000), n = live.length, rest = total - got;
           // clearly slower with the last one added: that was one too many; otherwise keep adding while there is enough left
           if (ramp.before && rate < ramp.before.rate * 0.9) { ramp.on = false; ramp.best = ramp.before.n; }
