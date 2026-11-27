@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 화면 캡처 (유튜브)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.24.5
+// @version      1.25.0
 // @description  유튜브 강의를 빠르게 재생하며 화면이 바뀐 장면만 사진으로 모아 ZIP으로 저장합니다. 영상 파일은 받지 않습니다.
 // @match        https://www.youtube.com/*
 // @match        https://m.youtube.com/*
@@ -42,7 +42,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   if (window.__lectureCaptureLoaded) return;
   window.__lectureCaptureLoaded = true;
   // marks for the work page's own "is the panel there?" check: which version started, and whether it got as far as picking its role
-  try { document.documentElement.setAttribute("data-lc-cap", "1.24.5"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
+  try { document.documentElement.setAttribute("data-lc-cap", "1.25.0"); document.documentElement.setAttribute("data-lc-stage", "setup"); } catch (e) {}
 
   var HOST_ORIGIN = "https://prepeit.github.io";
   var HOST_URL = HOST_ORIGIN + "/itpe3minutes/lecture-capture.html";
@@ -270,7 +270,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   // (1.24.3) at 720p the players that look for the changes take the photos right away: one pass instead of two (much faster)
   var DIGEST_SET = { every: 3, quality: "hd720", dedup: true, subs: true, ignoreCaptions: false, fastShot: true };
   var userSet = null;
-  function enterMode() { if (prefs.mode === "digest" && !userSet) { userSet = {}; Object.keys(DIGEST_SET).forEach(function (k) { userSet[k] = prefs[k]; }); Object.assign(prefs, DIGEST_SET); } }
+  function digestSet() { var q = prefs.digestQ === "hd1080" ? "hd1080" : "hd720", e = [1, 2, 3].indexOf(Number(prefs.digestEvery)) >= 0 ? Number(prefs.digestEvery) : 3; return Object.assign({}, DIGEST_SET, { every: e, quality: q }); }
+  function enterMode() { if (prefs.mode === "digest" && !userSet) { var ds = digestSet(); userSet = {}; Object.keys(ds).forEach(function (k) { userSet[k] = prefs[k]; }); Object.assign(prefs, ds); } }
   function leaveMode() { if (userSet) { Object.assign(prefs, userSet); userSet = null; } }
   function savePrefs() { save(PKEY, Object.assign({}, prefs, userSet || {})); }
   // 영상 정리: once the package reached the note page, a copy in the downloads folder is optional. On a phone the browser
@@ -1041,6 +1042,30 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (!segs.length) return { ok: false, why: "자막 내용 없음" };
     return { ok: true, source: tr.kind === "asr" ? "자동 생성 자막" : "자막", lang: tr.lang, name: tr.name, segs: tr.kind === "asr" ? joinLines(segs) : segs.map(function (x) { return { t: Math.round(x.t * 10) / 10, text: x.text }; }) };
   }
+  async function playlistItems(listId) {
+    var ctx = ytcfgGet("INNERTUBE_CONTEXT"); if (!ctx) throw new Error("페이지 정보 없음");
+    var key = ytcfgGet("INNERTUBE_API_KEY"), url = "/youtubei/v1/browse?prettyPrint=false" + (key ? "&key=" + encodeURIComponent(key) : "");
+    var hd = { "Content-Type": "application/json" }, cn = ytcfgGet("INNERTUBE_CONTEXT_CLIENT_NAME"), cv = ytcfgGet("INNERTUBE_CONTEXT_CLIENT_VERSION");
+    if (cn) hd["X-Youtube-Client-Name"] = String(cn); if (cv) hd["X-Youtube-Client-Version"] = String(cv);
+    function txt(n) { return n ? n.simpleText || n.content || (n.runs || []).map(function (r) { return r.text; }).join("") : ""; }
+    var items = [], seen = {}, body = { context: ctx, browseId: "VL" + listId };
+    for (var page = 0; page < 10 && body; page++) {
+      var r = await fetch(url, { method: "POST", credentials: "include", headers: hd, body: JSON.stringify(body) });
+      if (!r.ok) { if (!items.length) throw new Error("목록 요청 실패(" + r.status + ")"); break; }
+      var j = await r.json(), token = null;
+      (function walk(o, d) {
+        if (!o || typeof o !== "object" || d > 60) return;
+        var v = o.playlistVideoRenderer || o.playlistPanelVideoRenderer;
+        if (v && v.videoId && !seen[v.videoId]) { seen[v.videoId] = 1; items.push({ id: v.videoId, title: txt(v.title), len: txt(v.lengthText) || (v.lengthSeconds ? clockT(Number(v.lengthSeconds)) : "") }); return; }
+        var lk = o.lockupViewModel;
+        if (lk && lk.contentId && /VIDEO/.test(lk.contentType || "") && !seen[lk.contentId]) { seen[lk.contentId] = 1; var md = lk.metadata && lk.metadata.lockupMetadataViewModel; items.push({ id: lk.contentId, title: md ? txt(md.title) : "", len: "" }); return; }
+        var cc = o.continuationCommand; if (cc && cc.token && !token) token = cc.token;
+        for (var k in o) walk(o[k], d + 1);
+      })(j, 0);
+      body = token ? { context: ctx, continuation: token } : null;
+    }
+    return items.filter(function (it) { return /^[\w-]{11}$/.test(it.id); });
+  }
   async function watchTranscript(id) {
     var tried = [];
     try { var a = await transcriptFromApi(id); if (a.ok) return a; tried.push(a.why); } catch (e) { tried.push("스크립트 요청 오류"); }
@@ -1119,6 +1144,30 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return bridgeP;
   }
   var bridgeWhy = "";
+  var seenList = null;
+  function loadSeen() {
+    return bridge().then(function (ok) {
+      if (!ok) return [];
+      return new Promise(function (res) {
+        var t = 0; function on(e) { var d = e.data; if (e.source === window && d && d.lcb === 1 && d.dir === "out" && d.op === "seen") { window.removeEventListener("message", on); clearTimeout(t); res(Array.isArray(d.ids) ? d.ids : []); } }
+        window.addEventListener("message", on);
+        try { window.postMessage({ lcb: 1, dir: "in", op: "seen-get" }, "*"); } catch (e) {}
+        t = setTimeout(function () { window.removeEventListener("message", on); res([]); }, 1500);
+      });
+    }).then(function (ids) { seenList = ids; return ids; }, function () { seenList = []; return []; });
+  }
+  // 영상 정리 only: links to videos that already have a note are left out (unless the user switched that off)
+  function dropSeen(ids) {
+    if (prefs.mode !== "digest" || prefs.skipSeen === false || !seenList || !seenList.length) return { ids: ids, skipped: [] };
+    var keep = [], skipped = []; ids.forEach(function (id) { (seenList.indexOf(id) >= 0 ? skipped : keep).push(id); });
+    return { ids: keep, skipped: skipped };
+  }
+  function seenNote(ui, p) {
+    var d = dropSeen(p.ids), n = ui.$("seenNote"); if (!n) return d;
+    n.textContent = d.skipped.length ? "이미 정리한 영상 " + d.skipped.length + "개는 빼고 해요" + (d.ids.length ? " (남은 영상 " + d.ids.length + "개)" : " — 모두 정리한 영상이에요") + ". 다시 하려면 '이미 정리한 영상은 빼기'를 끄세요." : "";
+    n.style.display = d.skipped.length ? "" : "none";
+    return d;
+  }
   function bridgePut(item, blob) {
     return bridge().then(function (ok) {
       if (!ok) { bridgeWhy = "'강의 캡처 연결' 스크립트가 응답하지 않음"; return false; }
@@ -1439,6 +1488,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     ".st{color:var(--mu);font-size:12px;min-height:18px}.st b{color:var(--fg)}",
     ".res{margin:0;padding-left:16px;font-size:12px;color:var(--mu);max-height:320px;overflow:auto}.res .ok{color:var(--ok)}.res .bad{color:var(--bad)}.res .wait{color:var(--mu)}",
     ".note{font-size:11px;color:var(--mu);margin:0}",
+    ".pl{border:1px solid var(--ln);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px}.pl .pll{max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:2px;font-size:12px}.pl .pll label{display:flex;gap:6px;align-items:flex-start}.pl .pll small{color:var(--mu)}.pl .plb{display:flex;gap:6px;flex-wrap:wrap}.pl .plb button{padding:4px 8px;font-size:11px}",
     ".seg{display:flex;border:1px solid var(--ln);border-radius:8px;overflow:hidden}.seg label{flex:1;position:relative;text-align:center;cursor:pointer}",
     ".seg input{position:absolute;opacity:0}.seg span{display:block;padding:6px 4px;font-weight:700;color:var(--mu)}.seg input:checked+span{background:var(--ac);color:var(--ai)}.seg input:focus-visible+span{outline:2px solid var(--ac)}",
     "@media (max-width:700px){.p{top:auto;bottom:8px;left:8px;right:8px;width:auto;max-width:none;max-height:52vh;overflow:auto}.r{flex-wrap:wrap}.r label{min-width:140px}}"
@@ -1472,7 +1522,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
           h("label", {}, [h("input", { type: "radio", name: "lcmode", id: "modeCap", value: "capture" }), h("span", { text: "화면 캡처" })]),
           h("label", {}, [h("input", { type: "radio", name: "lcmode", id: "modeDig", value: "digest" }), h("span", { text: "영상 정리용 자료" })])
         ]),
-        h("textarea", { id: "links", rows: "4", placeholder: "유튜브 링크를 한 줄에 하나씩" }),
+        h("textarea", { id: "links", rows: "4", placeholder: "유튜브 링크를 한 줄에 하나씩 (재생목록 링크도 돼요)" }),
+        h("div", { id: "plBox", class: "pl", style: "display:none" }),
+        h("p", { class: "note", id: "seenNote", style: "display:none;color:var(--ac)" }),
         h("p", { class: "note", id: "digNote", text: "영상 정리: 여기서 대본(유튜브 스크립트)과 장면 사진을 모아 '제목_정리자료.zip'으로 저장하고, '강의 캡처 연결' 스크립트가 있으면 정리 노트로 자동으로 넘겨요. 끝나면 정리 노트 페이지로 넘어가서 Claude가 요약·구간 정리·답안 카드를 만들고 보관해요. 대본은 유튜브 영상 페이지의 패널에서 링크를 넣고 시작해야 가장 잘 받아져요." }),
         h("div", { class: "r capOnly" }, [
           h("label", {}, ["속도 (동시 재생 플레이어)", h("select", { id: "workers" }, [opt("0", "자동: 가장 빠르게 (추천)"), opt("2", "2개 고정 (약 4배속)"), opt("4", "4개 고정 (약 8배속)"), opt("8", "8개 고정 (약 16배속)"), opt("12", "12개 고정 (약 24배속)"), opt("16", "16개 고정 (약 32배속)")])]),
@@ -1491,6 +1543,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         h("div", { class: "r" }, [h("label", {}, ["사진 저장 형식", h("select", { id: "saveAs" }, [opt("zip", "ZIP (사진 파일 묶음)"), opt("pdf", "PDF (한 파일로 넘겨 보기)"), opt("both", "ZIP + PDF 둘 다")])])]),
         h("div", { class: "r", id: "pdfWordsRow" }, [h("label", {}, ["PDF 내용", h("select", { id: "pdfWords" }, [opt("fix", "사진 + 그 장면에서 한 말 · 오타 교정(정리 노트에서, 추천)"), opt("raw", "사진 + 자막 원문 그대로(바로 받기)"), opt("0", "캡처 사진만")])])]),
         h("label", { class: "c" }, [h("input", { type: "checkbox", id: "crop" }), h("span", { text: "슬라이드 부분만 남기기 (모든 사진에 공통인 검은 띠·테두리·빈 여백을 잘라내요)" })]),
+        h("div", { class: "r digOnly" }, [
+          h("label", {}, ["장면 확인 간격", h("select", { id: "digestEvery" }, [opt("3", "3초 (빠름, 기본)"), opt("2", "2초 (빨리 넘기는 강의)"), opt("1", "1초 (장표 하나도 안 놓치게, 느림)")])]),
+          h("label", {}, ["사진 화질", h("select", { id: "digestQ" }, [opt("hd720", "720p (기본, 빠름)"), opt("hd1080", "1080p (슬라이드 글씨가 작은 강의)")])])
+        ]),
+        h("label", { class: "c digOnly" }, [h("input", { type: "checkbox", id: "skipSeen" }), h("span", { text: "이미 정리한 영상은 빼기 (정리 노트에 있는 영상)" })]),
         h("label", { class: "c digOnly" }, [h("input", { type: "checkbox", id: "keepZip" }), h("span", { text: "정리 자료 ZIP도 다운로드 폴더에 저장 (정리 노트로 자동 전달되면 없어도 돼요. 전달이 안 되면 늘 저장해요)" })]),
         h("button", { id: "go", text: "캡처 시작" }),
         h("div", { class: "st", id: "st" }),
@@ -1503,7 +1560,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     (function mount() { if (!host.isConnected && document.body) document.body.appendChild(host); setTimeout(mount, 2000); })();
     $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
     $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
-    $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
+    $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn(); $("digestEvery").value = String([1, 2, 3].indexOf(Number(prefs.digestEvery)) >= 0 ? prefs.digestEvery : 3); $("digestQ").value = prefs.digestQ === "hd1080" ? "hd1080" : "hd720"; $("skipSeen").checked = prefs.skipSeen !== false;
     $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat(); $("crop").checked = !!prefs.crop; $("pdfWords").value = prefs.pdfWords === false || prefs.pdfWords === "0" ? "0" : prefs.pdfWords === "raw" ? "raw" : "fix"; $("pdfWordsRow").style.display = saveFormat() === "zip" ? "none" : "";
     function applyMode() {
       var dig = prefs.mode === "digest";
@@ -1518,13 +1575,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     function setOpen(o) { prefs.open = o; $("bd").style.display = o ? "" : "none"; $("fold").textContent = o ? "▾" : "▸"; savePrefs(); }
     setOpen(prefs.open !== false);
     $("hd").addEventListener("click", function () { setOpen(!prefs.open); });
-    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip", "fastShot", "saveAs", "crop", "pdfWords"].forEach(function (id) {
+    ["workers", "quality", "sens", "moving", "caps", "merge", "every", "dedup", "subs", "keepZip", "digestEvery", "digestQ", "skipSeen", "fastShot", "saveAs", "crop", "pdfWords"].forEach(function (id) {
       $(id).addEventListener("change", function () { readPrefs(); savePrefs(); });
     });
     function readPrefs() {
       prefs.workers = Number($("workers").value); prefs.quality = $("quality").value; prefs.minPx = Number($("sens").value);
       prefs.ignoreMoving = $("moving").checked; prefs.merge = $("merge").checked; prefs.ignoreCaptions = !$("caps").checked;
-      prefs.every = fixEvery($("every").value); prefs.dedup = $("dedup").checked; prefs.subs = $("subs").checked; prefs.keepZip = $("keepZip").checked;
+      prefs.every = fixEvery($("every").value); prefs.dedup = $("dedup").checked; prefs.subs = $("subs").checked; prefs.keepZip = $("keepZip").checked; prefs.digestEvery = Number($("digestEvery").value) || 3; prefs.digestQ = $("digestQ").value; prefs.skipSeen = $("skipSeen").checked;
       prefs.fastShot = $("fastShot").checked; prefs.saveAs = $("saveAs").value; prefs.crop = $("crop").checked; prefs.pdfWords = $("pdfWords").value === "0" ? false : $("pdfWords").value;
       $("pdfWordsRow").style.display = prefs.saveAs === "zip" ? "none" : "";
     }
@@ -1548,13 +1605,13 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       applyPrefs: function () {
         $("workers").value = String(prefs.workers); $("quality").value = prefs.quality; $("sens").value = String(prefs.minPx);
         $("moving").checked = !!prefs.ignoreMoving; $("merge").checked = !!prefs.merge; $("caps").checked = prefs.ignoreCaptions === false;
-        $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn();
+        $("every").value = String(prefs.every || 1); $("dedup").checked = prefs.dedup !== false; $("subs").checked = prefs.subs !== false; $("keepZip").checked = keepZipOn(); $("digestEvery").value = String([1, 2, 3].indexOf(Number(prefs.digestEvery)) >= 0 ? prefs.digestEvery : 3); $("digestQ").value = prefs.digestQ === "hd1080" ? "hd1080" : "hd720"; $("skipSeen").checked = prefs.skipSeen !== false;
         $("fastShot").checked = !!prefs.fastShot; $("saveAs").value = saveFormat(); $("crop").checked = !!prefs.crop; $("pdfWords").value = prefs.pdfWords === false || prefs.pdfWords === "0" ? "0" : prefs.pdfWords === "raw" ? "raw" : "fix"; $("pdfWordsRow").style.display = saveFormat() === "zip" ? "none" : "";
         applyMode();
       }
     };
   }
-  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip, fastShot: prefs.fastShot, saveAs: prefs.saveAs, crop: prefs.crop, pdfWords: prefs.pdfWords }; }
+  function pickPrefs() { return { workers: prefs.workers, quality: prefs.quality, minPx: prefs.minPx, ignoreMoving: prefs.ignoreMoving, ignoreCaptions: prefs.ignoreCaptions, merge: prefs.merge, every: prefs.every, dedup: prefs.dedup, subs: prefs.subs, mode: prefs.mode, keepZip: prefs.keepZip, digestEvery: prefs.digestEvery, digestQ: prefs.digestQ, skipSeen: prefs.skipSeen, fastShot: prefs.fastShot, saveAs: prefs.saveAs, crop: prefs.crop, pdfWords: prefs.pdfWords }; }
   function jobPrefs() { return Object.assign(pickPrefs(), userSet || {}); }
 
   // =====================================================================
@@ -1714,6 +1771,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       }));
     }
     refresh();
+    loadSeen().then(function () { seenNote(ui, parseLinks($("links").value)); });
+    $("links").addEventListener("input", function () { seenNote(ui, parseLinks($("links").value)); });
+    ["modeCap", "modeDig", "skipSeen"].forEach(function (k) { $(k).addEventListener("change", function () { ui.readPrefs(); seenNote(ui, parseLinks($("links").value)); }); });
     function onMessage(e) {
       var d = e.data;
       if (!d || d.lc !== 1) return;
@@ -1750,6 +1810,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       ui.readPrefs(); savePrefs();
       var p = parseLinks($("links").value);
       if (!p.ids.length) { ui.status("유튜브 링크를 넣어 주세요.", p.bad ? "알아볼 수 없는 줄 " + p.bad + "개" : ""); return; }
+      if (/[?&]list=/.test($("links").value) && !p.ids.length) { ui.status("재생목록은 유튜브 페이지의 패널에 넣어 주세요.", "거기서 영상 목록을 펼쳐 골라 넣을 수 있어요."); return; }
+      var sd = seenNote(ui, p); if (!sd.ids.length) { ui.status("모두 이미 정리한 영상이에요.", "다시 하려면 '이미 정리한 영상은 빼기'를 끄세요."); return; } p.ids = sd.ids;
       running = true; stopReq = false; refresh();
       var prev = resume && resume.ids.join() === p.ids.join() ? resume : null; resume = null;
       // ask for the work window right inside the click (the browser requires that)
@@ -2675,11 +2737,47 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       });
     }
     var pfT = 0;
-    $("links").addEventListener("input", function () { clearTimeout(pfT); pfT = setTimeout(function () { prefetch(parseLinks($("links").value).ids); }, 600); });
+    $("links").addEventListener("input", function () { clearTimeout(pfT); pfT = setTimeout(function () { prefetch(parseLinks($("links").value).ids); seenNote(ui, parseLinks($("links").value)); checkPlaylist(); }, 600); });
+    loadSeen().then(function () { seenNote(ui, parseLinks($("links").value)); });
+    ["modeCap", "modeDig", "skipSeen"].forEach(function (k) { $(k).addEventListener("change", function () { ui.readPrefs(); seenNote(ui, parseLinks($("links").value)); }); });
+    // C2: a playlist link opens into its videos, to tick and put in
+    var plDone = "";
+    function checkPlaylist() {
+      var m = /[?&]list=([\w-]{10,})/.exec($("links").value); if (!m || m[1] === plDone) return; plDone = m[1];
+      var box = $("plBox"); box.style.display = ""; box.textContent = "재생목록을 펼치는 중…";
+      playlistItems(m[1]).then(function (items) { drawPlaylist(items); }, function (e) { box.textContent = "재생목록을 펼치지 못했어요 (" + (e && e.message || e) + "). 링크를 하나씩 넣어 주세요."; });
+    }
+    function drawPlaylist(items) {
+      var box = $("plBox"); box.textContent = "";
+      if (!items.length) { box.textContent = "재생목록에서 영상을 찾지 못했어요."; return; }
+      var seenN = items.filter(function (it) { return seenList && seenList.indexOf(it.id) >= 0; }).length;
+      box.appendChild(h("b", { text: "재생목록 영상 " + items.length + "개" + (seenN ? " · 이미 정리 " + seenN + "개" : "") }));
+      var list = h("div", { class: "pll" }), boxes = [];
+      items.forEach(function (it, i) {
+        var seen = seenList && seenList.indexOf(it.id) >= 0, cb = h("input", { type: "checkbox" }); cb.checked = !(seen && prefs.mode === "digest" && prefs.skipSeen !== false); boxes.push({ cb: cb, it: it });
+        list.appendChild(h("label", {}, [cb, h("span", { text: (i + 1) + ". " + (it.title || it.id) }), h("small", { text: (it.len ? " " + it.len : "") + (seen ? " · 정리함" : "") })]));
+      });
+      box.appendChild(list);
+      var put = h("button", { text: "선택한 영상 넣기" }), all = h("button", { text: "모두 선택", style: "background:var(--bg);color:var(--ac)" }), none = h("button", { text: "모두 해제", style: "background:var(--bg);color:var(--ac)" });
+      function count() { put.textContent = "선택한 " + boxes.filter(function (b) { return b.cb.checked; }).length + "개 넣기"; }
+      boxes.forEach(function (b) { b.cb.addEventListener("change", count); }); count();
+      all.addEventListener("click", function () { boxes.forEach(function (b) { b.cb.checked = true; }); count(); });
+      none.addEventListener("click", function () { boxes.forEach(function (b) { b.cb.checked = false; }); count(); });
+      put.addEventListener("click", function () {
+        var ids = boxes.filter(function (b) { return b.cb.checked; }).map(function (b) { return b.it.id; });
+        $("links").value = ids.map(watchUrl).join("\n"); box.style.display = "none"; prefetch(ids); seenNote(ui, parseLinks($("links").value));
+        ui.status("영상 " + ids.length + "개를 넣었어요.", "시작 버튼을 누르세요.");
+      });
+      box.appendChild(h("div", { class: "plb" }, [put, all, none]));
+    }
+    if (/[?&]list=/.test(location.href) && !$("links").value.trim()) $("links").value = location.href;
+    setTimeout(checkPlaylist, 800);
     $("go").addEventListener("click", async function () {
       ui.readPrefs(); savePrefs();
       var p = parseLinks($("links").value);
       if (!p.ids.length) { ui.status("유튜브 링크를 넣어 주세요.", p.bad ? "알아볼 수 없는 줄 " + p.bad + "개" : ""); return; }
+      if (seenList === null) await Promise.race([loadSeen(), sleep(1200)]);
+      var sd = seenNote(ui, p); if (!sd.ids.length) { ui.status("모두 이미 정리한 영상이에요.", "다시 하려면 '이미 정리한 영상은 빼기'를 끄세요."); return; } p.ids = sd.ids;
       try { var own = document.querySelector("#movie_player video"); if (own) own.pause(); } catch (e) {}
       // wait a little for transcripts still loading (under 3 s, so the browser still counts the tap for opening a tab)
       prefetch(p.ids);

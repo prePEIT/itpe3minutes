@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         강의 캡처 연결 (정리 노트 자동 전달)
 // @namespace    https://prepeit.github.io/itpe3minutes/
-// @version      1.22.0
+// @version      1.25.0
 // @description  강의 화면 캡처가 만든 정리자료와 LiveWiki 대본을 영상 정리 노트 페이지로 자동으로 넘깁니다.
 // @match        https://prepeit.github.io/itpe3minutes/lecture-capture.html*
 // @match        https://livewiki.com/*
@@ -32,7 +32,7 @@
 (function () {
   "use strict";
   if (window.__lcBridge) return; window.__lcBridge = true;
-  var CHUNK = 1 << 20, KEEP_DAYS = 14, IDX = "lcb:index", GM_SMALL = 2 << 20;
+  var CHUNK = 1 << 20, KEEP_DAYS = 14, IDX = "lcb:index", SEEN = "lcb:seen", GM_SMALL = 2 << 20;
   // Tampermonkey runs scripts with storage rights behind a wrapper: `window` there is not the page's window object
   var W = window; try { if (typeof unsafeWindow !== "undefined" && unsafeWindow) W = unsafeWindow; } catch (e) {}
   function isSelf(src) { try { return !!src && (src === W || src === window || src === W.self || src.self === W.self); } catch (e) { return false; } }
@@ -213,13 +213,16 @@
   window.addEventListener("message", function (e) {
     var d = e.data; if (!d || d.lcb !== 1 || d.dir !== "in") return;
     if (isSelf(e.source)) {
-      if (d.op === "ping" && canPut) out({ op: "hello", v: 4, put: true });
+      if (d.op === "ping" && canPut) out({ op: "hello", v: 5, put: true });
+      // (v5) which videos already have a note: the capture panel leaves them out
+      if (d.op === "seen-get" && canPut) store.get(SEEN).then(function (v) { out({ op: "seen", ids: v && Array.isArray(v.ids) ? v.ids : [] }); });
       if (d.op === "put" && canPut) serial(function () { return put(d).catch(function (er) { out({ op: "put-fail", ref: d.ref, why: String(er && er.message || er) }); }); });
       return;
     }
     if (!isInbox() || !e.source || !(e.origin === "null" || /^https:\/\/[\w-]+(\.[\w-]+)*\.claudeusercontent\.com$/.test(e.origin || ""))) return;
     var to = e.source; noteFrame = to;
-    if (d.op === "ping") return out({ op: "hello", v: 4, inbox: true }, to);
+    if (d.op === "ping") return out({ op: "hello", v: 5, inbox: true }, to);
+    if (d.op === "seen") { var ids = (Array.isArray(d.ids) ? d.ids : []).filter(function (x) { return /^[\w-]{11}$/.test(String(x)); }).slice(0, 3000); return store.set(SEEN, { ids: ids, at: Date.now() }); }
     if (d.op === "list") return serial(function () { return list(to); });
     if (d.op === "get") return serial(function () { return get(d, to); });
     if (d.op === "done") return serial(function () { return done(d, to); });
